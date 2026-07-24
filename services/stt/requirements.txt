@@ -1,0 +1,9 @@
+# stt service — Phase 1 dependencies
+#
+# The Phase 1 foundation (health server + provider interface + tests) runs on
+# the Python 3.14 standard library ONLY, so this file is intentionally empty of
+# runtime deps. Real STT dependencies (e.g. faster-whisper) are added in the
+# Python AI services phase — NOT during foundation work.
+#
+# Optional dev tooling (not required to run tests, which use stdlib unittest):
+#   pytest>=8,<10

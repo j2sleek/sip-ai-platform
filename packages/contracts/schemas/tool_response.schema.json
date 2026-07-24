@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sip-ai-platform/contracts/v1/ToolResponse.json",
+  "title": "ToolResponse",
+  "description": "The result of executing a ToolRequest. Errors are structured, never raw crashes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tool_call_id", "name", "status"],
+  "properties": {
+    "tool_call_id": {
+      "type": "string",
+      "description": "Correlates with the originating ToolRequest.tool_call_id."
+    },
+    "name": {
+      "type": "string",
+      "description": "Tool name that was executed."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "error", "timeout"],
+      "description": "Execution outcome."
+    },
+    "result": {
+      "description": "Tool result payload when status=ok. Shape is tool-specific.",
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    },
+    "error": {
+      "type": ["object", "null"],
+      "description": "Structured error when status is error or timeout.",
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" }
+      },
+      "required": ["code", "message"]
+    }
+  }
+}

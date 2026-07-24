@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sip-ai-platform/contracts/v1/AudioChunk.json",
+  "title": "AudioChunk",
+  "description": "A single chunk of call audio crossing the media boundary. Phase 1 documents the shape only; no real audio is streamed yet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["call_id", "sequence", "timestamp", "codec", "sample_rate", "channels", "data"],
+  "properties": {
+    "call_id": {
+      "type": "string",
+      "description": "Call this audio belongs to (correlation ID)."
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic chunk index within the call."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 capture/emit time."
+    },
+    "codec": {
+      "type": "string",
+      "enum": ["pcm_s16le"],
+      "description": "Audio encoding. Phase 1 baseline is 16-bit signed little-endian PCM."
+    },
+    "sample_rate": {
+      "type": "integer",
+      "enum": [8000, 16000],
+      "description": "Samples per second. AudioSocket baseline is 8000."
+    },
+    "channels": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Channel count. Mono for telephony."
+    },
+    "data": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "description": "Base64-encoded PCM payload. Tests MUST NOT embed real audio."
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sip-ai-platform/contracts/v1/Transcript.json",
+  "title": "Transcript",
+  "description": "STT output for a span of call audio.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["call_id", "text", "is_final"],
+  "properties": {
+    "call_id": {
+      "type": "string",
+      "description": "Call this transcript belongs to (correlation ID)."
+    },
+    "text": {
+      "type": "string",
+      "description": "Recognized text."
+    },
+    "is_final": {
+      "type": "boolean",
+      "description": "True for a finalized utterance, false for an interim/partial result."
+    },
+    "confidence": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Optional recognition confidence in [0,1]."
+    },
+    "language": {
+      "type": ["string", "null"],
+      "description": "Optional BCP-47 language tag, e.g. en-US."
+    },
+    "start_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Optional start offset within the call, in milliseconds."
+    },
+    "end_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Optional end offset within the call, in milliseconds."
+    }
+  }
+}

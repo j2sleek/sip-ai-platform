@@ -1,0 +1,8 @@
+# tts service — Phase 1 dependencies
+#
+# The Phase 1 foundation runs on the Python 3.14 standard library ONLY.
+# Real TTS dependencies (e.g. piper-tts / onnxruntime) are added in the Python
+# AI services phase — NOT during foundation work.
+#
+# Optional dev tooling (tests use stdlib unittest and don't require it):
+#   pytest>=8,<10

@@ -1,0 +1,62 @@
+# ─── Secrets / environment ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+*.secret
+
+# ─── Elixir / Erlang ─────────────────────────────────────────────────────────
+/_build/
+**/_build/
+/deps/
+**/deps/
+*.ez
+erl_crash.dump
+.elixir_ls/
+/cover/
+**/cover/
+
+# ─── Node.js / TypeScript ──────────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ─── Python ─────────────────────────────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# ─── AI models (never commit large model weights) ──────────────────────────────
+*.gguf
+*.bin
+*.onnx
+*.pt
+*.safetensors
+models/
+/services/**/models/
+
+# ─── Logs / runtime ────────────────────────────────────────────────────────────
+*.log
+logs/
+*.pid
+tmp/
+.DS_Store
+
+# ─── Editor / OS ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp

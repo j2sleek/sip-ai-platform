@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sip-ai-platform/contracts/v1/AgentMessage.json",
+  "title": "AgentMessage",
+  "description": "A single message in an agent conversation history (LLM input/output element).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["role", "content"],
+  "properties": {
+    "role": {
+      "type": "string",
+      "enum": ["system", "user", "assistant", "tool"],
+      "description": "Message author role."
+    },
+    "content": {
+      "type": "string",
+      "description": "Text content of the message."
+    },
+    "name": {
+      "type": ["string", "null"],
+      "description": "Optional name of the tool for role=tool messages."
+    },
+    "tool_call_id": {
+      "type": ["string", "null"],
+      "description": "Optional identifier linking a tool result to its ToolRequest."
+    }
+  }
+}

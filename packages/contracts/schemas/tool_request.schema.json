@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sip-ai-platform/contracts/v1/ToolRequest.json",
+  "title": "ToolRequest",
+  "description": "A request from the agent to execute a tool. See TOOL-SPEC.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tool_call_id", "name", "arguments"],
+  "properties": {
+    "tool_call_id": {
+      "type": "string",
+      "description": "Unique identifier correlating this request with its ToolResponse."
+    },
+    "name": {
+      "type": "string",
+      "description": "Tool name, e.g. run_n8n_workflow, capture_chart, get_market_data."
+    },
+    "arguments": {
+      "type": "object",
+      "description": "Validated tool input. Never contains credentials.",
+      "additionalProperties": true
+    },
+    "call_id": {
+      "type": ["string", "null"],
+      "description": "Optional originating call correlation ID."
+    }
+  }
+}

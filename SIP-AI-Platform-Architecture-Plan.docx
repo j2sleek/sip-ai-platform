@@ -1,0 +1,70 @@
+SIP AI Platform — Architecture & Implementation Plan
+Elixir/OTP + Asterisk + Python AI Services + Node.js/TypeScript + n8n
+Executive Decision
+The platform will use Asterisk for SIP/PJSIP and telephony, Elixir/OTP for real-time call/session orchestration and fault tolerance, Python for speech and AI inference, and Node.js/TypeScript for existing services such as ChartCapture and TypeScript-first integrations. n8n remains the automation layer.
+
+The preferred Asterisk media boundary is the modern WebSocket channel driver when the selected Asterisk version supports it. AudioSocket is the first fallback because it provides a simple bidirectional TCP audio protocol. RTP External Media remains an interoperability and advanced-media option.
+Why This Architecture
+The design separates the parts of the system that change for different reasons. Telephony can evolve independently of AI. AI providers can be replaced without changing SIP logic. Existing Node.js services remain useful. Python can use the strongest open-source audio and ML ecosystem. Elixir/OTP provides lightweight process isolation, supervision, concurrency, and resilient long-running sessions.
+System Architecture
+Linphone connects to Asterisk using SIP/RTP. Asterisk owns endpoints, call routing and telephony. Elixir connects to Asterisk through ARI for asynchronous call control and coordinates the selected media transport. Each call is represented by isolated supervised Elixir processes. Python services provide STT, LLM and TTS. Node.js services provide ChartCapture and other TypeScript-native capabilities. n8n handles business automation and external integrations.
+Media Streaming Decision
+The implementation will first validate Asterisk WebSocket media streaming. The current Asterisk documentation describes chan_websocket as reducing the need for application developers to manage RTP packet manipulation and packet timing, while supporting bidirectional media and TLS. If the deployment baseline cannot support it, AudioSocket becomes the default media transport. RTP External Media is retained as a fallback for interoperability and specialized media infrastructure.
+Implementation Sequence
+1. Environment doctor and repository foundation.
+2. Asterisk/PJSIP and Linphone registration.
+3. Elixir ARI call control.
+4. Media transport proof of concept.
+5. Python STT/LLM/TTS services.
+6. Agent runtime.
+7. Full voice loop.
+8. Barge-in and cancellation.
+9. Tool system.
+10. n8n and ChartCapture integrations.
+11. Outbound AI calling.
+12. Security and observability.
+13. Load testing.
+14. Production deployment.
+Proof-of-Concept Gates
+Before expanding the system, prove each boundary independently:
+
+A. Linphone ↔ Asterisk audio.
+B. Elixir ↔ Asterisk ARI events.
+C. Asterisk ↔ Elixir bidirectional media.
+D. Elixir ↔ Python STT.
+E. Elixir ↔ Python LLM.
+F. Elixir ↔ Python TTS.
+G. Complete call loop.
+H. Tool execution.
+I. AI outbound call.
+
+Every gate requires automated checks, manual validation and documented measurements.
+Concurrency Strategy
+The first target is correctness and observability, not an arbitrary concurrency number. Elixir will model calls as isolated supervised sessions. External AI services will be bounded using queues, timeouts and concurrency controls. Load tests will determine the practical limits of the selected hardware. Scaling the AI inference layer independently from the Elixir telephony core is a primary architectural goal.
+Security
+Only the minimum required services should be reachable from the public network. Asterisk SIP traffic and the HTTPS control surface are public-facing when required. ARI, Ollama, STT, TTS and internal tool services remain private. Credentials are environment-managed. SIP accounts use strong passwords. Rate limiting, firewalling, fail2ban and structured audit logs are required before public deployment.
+Learning Strategy
+The project is intentionally designed as a learning platform. Each technology has a clear role: Asterisk teaches telephony and SIP, Elixir teaches OTP and resilient concurrency, Python teaches practical AI/audio inference, and Node.js/TypeScript lets the project reuse existing APIs and ChartCapture work. The system should be built incrementally so every stage produces a working result rather than a large untestable codebase.
+Definition of Done
+The platform is considered production-ready only when inbound and outbound calls work, bidirectional media is stable, AI responses are observable, barge-in is reliable, tools are isolated and authenticated, failures are supervised, resources are cleaned up, and concurrency limits are measured under load.
+Recommended Architecture Diagram
+Linphone
+   |
+   | SIP/RTP
+   v
+Asterisk / PJSIP
+   |
+   +---- ARI REST/WebSocket ----> Elixir/OTP Real-Time Core
+   |
+   +---- WebSocket Media -------> Elixir Media Session
+                                      |
+                                      +--> VAD
+                                      +--> Python STT
+                                      +--> Agent Runtime
+                                      +--> Python TTS
+                                      |
+                                      +--> Node.js ChartCapture
+                                      +--> n8n Workflows
+                                      +--> Supabase / APIs
+Primary Technical Recommendation
+Start with Asterisk 22 or newer where practical, verify the exact availability of chan_websocket in the target build, and implement a MediaTransport abstraction. Use WebSocket media first, AudioSocket second, and RTP External Media only when needed. Keep the media contract independent from the agent contract.

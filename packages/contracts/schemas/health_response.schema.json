@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sip-ai-platform/contracts/v1/HealthResponse.json",
+  "title": "HealthResponse",
+  "description": "Standard health payload returned by every service (voice_core, control_api, stt, llm, tts).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "service", "version"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["ok", "degraded", "error"],
+      "description": "Overall service status."
+    },
+    "service": {
+      "type": "string",
+      "enum": ["voice_core", "control_api", "stt", "llm", "tts"],
+      "description": "Canonical service name."
+    },
+    "version": {
+      "type": "string",
+      "description": "Service semantic version, e.g. 0.1.0."
+    }
+  }
+}

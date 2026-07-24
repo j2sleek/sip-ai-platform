@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sip-ai-platform/contracts/v1/CallSession.json",
+  "title": "CallSession",
+  "description": "State of a single call, owned by the Elixir voice_core. Conceptual data model for Phase 1; fields expand in later phases.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["call_id", "session_id", "direction", "state", "created_at"],
+  "properties": {
+    "call_id": {
+      "type": "string",
+      "description": "Stable identifier for the call (correlation ID across all services and logs)."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Identifier for the agent/media session bound to this call."
+    },
+    "direction": {
+      "type": "string",
+      "enum": ["inbound", "outbound"],
+      "description": "Call direction relative to the platform."
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "created",
+        "ringing",
+        "answered",
+        "media_connected",
+        "in_progress",
+        "ended",
+        "failed"
+      ],
+      "description": "Lifecycle state."
+    },
+    "peer": {
+      "type": "string",
+      "description": "Remote endpoint identifier (e.g. SIP extension). Optional."
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "Agent handling the call, if assigned. Optional."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 creation timestamp."
+    },
+    "ended_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "ISO 8601 end timestamp, or null while active."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Free-form contextual metadata. No secrets.",
+      "additionalProperties": true
+    }
+  }
+}
