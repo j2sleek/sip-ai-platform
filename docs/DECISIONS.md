@@ -190,4 +190,108 @@ install OTP 29 + Elixir 1.20.2 natively from one source; the pin transfers direc
 | B4 | No GPU/CUDA + constrained RAM → local heavy inference infeasible | Medium | Offload inference; dev uses tiny models (Piper/faster-whisper-tiny/small Ollama) |
 | B5 | PRoot/Termux: no Docker, systemd not init, UDP/RTP reliability uncertain | Medium | Direct processes in dev; validate SIP/RTP in Phase 2; production on VPS |
 
-No irreversible decisions were made while evidence is incomplete.
+
+---
+
+## ADR-0007 — Asterisk Runtime Strategy
+
+**Status:** Accepted (implemented in Phase 2A)
+
+**Context:** Asterisk is now installed in an Ubuntu 26.04/PRoot/Termux environment. The system has no systemd as PID 1, and process management must be handled manually. The installed version is Asterisk 22.5.2 from the Ubuntu apt repository.
+
+**Decision:**
+
+1. **Installation method:** Use Ubuntu 26.04 apt repository package (`asterisk` 1:22.5.2~dfsg+~cs6.15.60671435-1). This provides a stable, supported baseline without requiring source compilation.
+
+2. **Process management:** Since systemd is not available as PID 1 under PRoot, implement custom start/stop/status scripts in `infra/asterisk/` that:
+   - Start Asterisk in foreground mode (`asterisk -f`)
+   - Use PID files for tracking (`/tmp/sip-ai-asterisk.pid`)
+   - Avoid `killall` or `pkill` (target specific PID only)
+   - Support graceful shutdown (SIGTERM)
+
+3. **Development vs Production:**
+   - Development (this environment): Use custom scripts for lifecycle management
+   - Production (Ubuntu VPS): Use systemd service files and proper user permissions
+
+**Why apt package over source compilation:**
+
+- Zero-cost, no compilation time
+- Supported by Ubuntu/Debian
+- ARM64-compatible
+- Includes all standard modules
+- Easier security updates
+
+**Known limitations:**
+
+- Asterisk 22.5.2 does not include `chan_websocket.so` (requires 22.6.0+)
+- PRoot may affect UDP/RTP performance
+- No privileged port binding without root
+
+**Reproduction:** Installation via `apt install asterisk` on Ubuntu 26.04 ARM64.
+
+---
+
+## ADR-0008 — Media Transport Capability Assessment
+
+**Status:** Accepted (implemented in Phase 2A)
+
+**Context:** Phase 2A installed Asterisk 22.5.2 and verified module availability. The key question was whether `chan_websocket` (the preferred transport per MEDIA-STREAMING-DECISION.md) is available in the apt package.
+
+**Evidence:**
+
+- `chan_websocket.so`: **NOT PRESENT** in Asterisk 22.5.2
+- `app_audiosocket.so`: ✅ Present and loaded
+- `chan_audiosocket.so`: ✅ Present and loaded  
+- `res_audiosocket.so`: ✅ Present and loaded
+- RTP modules: ✅ All present and loaded
+
+**Decision:**
+
+1. **Primary media transport for Phase 4:** AudioSocket
+   - All required modules are available
+   - TCP-based (simpler than UDP/RTP under PRoot)
+   - Lower implementation complexity
+   - Excellent debuggability
+
+2. **chan_websocket status:** Deferred
+   - Not available in current build
+   - Do NOT attempt source compilation at this time
+   - Architecture remains open for future adoption
+   - `MediaTransport` abstraction keeps door open
+
+3. **Secondary transport:** RTP External Media
+   - Available as fallback
+   - Useful for interoperability
+   - Higher complexity (UDP packet timing)
+
+**Why AudioSocket first:**
+
+- Verified availability in the installed build
+- Matches ADR-0003 provisional decision
+- Lower risk for initial implementation
+- TCP protocol works reliably under PRoot
+- Simpler Elixir implementation
+
+**Future chan_websocket adoption path:**
+
+1. Wait until Ubuntu provides Asterisk 22.6.0+ or 23.x in apt
+2. OR deploy to Ubuntu VPS with newer Asterisk version
+3. OR build from source when there's a demonstrated need
+4. Implement as additional `MediaTransport` adapter
+5. Benchmark against AudioSocket before switching
+
+**Reversal trigger:** Confirming `chan_websocket.so` in a production-deployable build.
+
+---
+
+## Blockers Update
+
+| # | Blocker | Severity | Resolution path |
+|---|---------|----------|------------|
+| B1 | Asterisk not installed → media/module facts unverified | High (blocks Phase 2+) | **RESOLVED (Phase 2A):** Asterisk 22.5.2 installed; modules verified via `module show` |
+| B2 | `chan_websocket` availability unconfirmed; apt build (22.5.2) predates documented 22.6.0 | Medium | **RESOLVED (Phase 2A):** Confirmed NOT present; AudioSocket selected as primary transport |
+| B3 | ~~Elixir/Mix missing + OTP 29 vs Elixir 1.18 mismatch~~ | ~~High~~ | **RESOLVED (Phase 0.5, ADR-0006):** installed Elixir 1.20.2 (OTP-29 precompiled build); compatibility verified |
+| B4 | No GPU/CUDA + constrained RAM → local heavy inference infeasible | Medium | Offload inference; dev uses tiny models (Piper/faster-whisper-tiny/small Ollama) |
+| B5 | PRoot/Termux: no Docker, systemd not init, UDP/RTP reliability uncertain | Medium | Direct processes in dev (ADR-0007); validate SIP/RTP in Phase 2B; production on VPS |
+
+No irreversible decisions were made. All choices are reversible based on new evidence from later phases.
