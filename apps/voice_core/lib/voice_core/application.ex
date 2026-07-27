@@ -15,7 +15,16 @@ defmodule VoiceCore.Application do
 
   @impl true
   def start(_type, _args) do
-    children = []
+    # AudioSocket server configuration
+    audiosocket_config = %{
+      host: "127.0.0.1",
+      port: 9019
+    }
+
+    children = [
+      # AudioSocket server for bidirectional PCM audio transport
+      {VoiceCore.AudioSocket.Server, audiosocket_config}
+    ]
 
     # `:one_for_one` — when a child crashes only that child is restarted. This
     # is the correct default for the independent, isolated subsystems this tree

@@ -5,7 +5,13 @@ import Config
 
 config :voice_core,
   # Overridden at runtime from APP_ENV. Kept here so the key always exists.
-  app_env: "development"
+  app_env: "development",
+
+  # AudioSocket configuration for media transport
+  audiosocket: [
+    host: "127.0.0.1",
+    port: 9019
+  ]
 
 # Logger default; the level is overridden at runtime from LOG_LEVEL.
 config :logger, :console,
