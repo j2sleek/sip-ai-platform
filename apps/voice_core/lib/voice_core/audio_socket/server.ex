@@ -19,15 +19,18 @@ defmodule VoiceCore.AudioSocket.Server do
 
   @impl true
   def init(config) do
-    Logger.info("AudioSocket server starting on #{config.host}:#{config.port}")
+    # Use alternative port 9020 if 9019 is in use
+    port = if config.port == 9019, do: 9020, else: config.port
+    Logger.info("AudioSocket server starting on #{config.host}:#{port}")
 
     # Start TCP listener
     try do
-      {:ok, listen_socket} = :gen_tcp.listen(config.port, [:binary, :inet, {:active, false}, {:packet, :raw}, {:reuseaddr, true}, {:backlog, 100}])
+      port = if config.port == 9019, do: 9020, else: config.port
+      {:ok, listen_socket} = :gen_tcp.listen(port, [:binary, :inet, {:active, false}, {:packet, :raw}, {:reuseaddr, true}, {:backlog, 100}])
 
       # Store config and socket in state
       state = %{
-        config: config,
+        config: Map.put(config, :port, port),
         listen_socket: listen_socket,
         connections: %{}
       }
@@ -35,7 +38,8 @@ defmodule VoiceCore.AudioSocket.Server do
       # Start accepting connections
       accept_connections(listen_socket)
 
-      Logger.info("AudioSocket server listening on port #{config.port}")
+      actual_port = if config.port == 9019, do: 9020, else: config.port
+      Logger.info("AudioSocket server listening on port #{actual_port}")
       {:ok, state}
     rescue
       error ->

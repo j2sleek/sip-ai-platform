@@ -22,6 +22,10 @@ defmodule VoiceCore.Application do
     }
 
     children = [
+      # Registry for tracking active calls
+      {Registry, keys: :unique, name: VoiceCore.CallRegistry},
+      # Supervisor for individual call sessions
+      {VoiceCore.CallSupervisor, []},
       # AudioSocket server for bidirectional PCM audio transport
       {VoiceCore.AudioSocket.Server, audiosocket_config}
     ]
