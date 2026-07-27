@@ -40,15 +40,15 @@ defmodule VoiceCore.CallSession do
   @impl true
   def init(args) do
     call_id = Map.fetch!(args, :call_id)
+    Logger.info("CallSession started for #{call_id}")
 
-    # Register in CallRegistry
-    case Registry.register(VoiceCore.CallRegistry, call_id, self()) do
-      {:ok, _} ->
-        Logger.info("CallSession started for #{call_id}")
-        {:ok, new(call_id, Map.get(args, :source), Map.get(args, :caller_id), Map.get(args, :destination))}
-      {:error, reason} ->
-        {:stop, reason}
-    end
+    # Start MediaSession
+    {:ok, media_pid} = VoiceCore.MediaSession.start_link(%{call_id: call_id})
+
+    state =
+      new(call_id, Map.get(args, :source), Map.get(args, :caller_id), Map.get(args, :destination))
+
+    {:ok, %{state | media_session: media_pid}}
   end
 
   defp via_tuple(call_id) do
