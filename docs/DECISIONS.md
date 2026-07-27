@@ -294,4 +294,80 @@ install OTP 29 + Elixir 1.20.2 natively from one source; the pin transfers direc
 | B4 | No GPU/CUDA + constrained RAM → local heavy inference infeasible | Medium | Offload inference; dev uses tiny models (Piper/faster-whisper-tiny/small Ollama) |
 | B5 | PRoot/Termux: no Docker, systemd not init, UDP/RTP reliability uncertain | Medium | Direct processes in dev (ADR-0007); validate SIP/RTP in Phase 2B; production on VPS |
 
+
+---
+
+## ADR-0009 — PJSIP Telephony Foundation
+
+**Status:** Accepted (implemented in Phase 2B)
+
+**Context:** Phase 2B requires configuring Asterisk to support Linphone registration and basic call testing. The platform needs a reproducible telephony foundation before integrating Elixir ARI control.
+
+**Decision:**
+
+1. **Endpoint 1001**: Represents the Linphone client
+   - Standard SIP endpoint with digest authentication
+   - Context: `internal`
+   - Codecs: ulaw, alaw (conservative, widely supported)
+   - Purpose: Test registration and call origination
+
+2. **Endpoint 2000**: AI service placeholder
+   - Temporary endpoint for development testing
+   - Dialplan routes to echo test with confirmation prompt
+   - Purpose: Validate bidirectional audio without Elixir integration
+   - Future: Will be replaced by Elixir ARI-controlled endpoint
+
+3. **Transport**: UDP on 0.0.0.0:5060
+   - Simple, widely compatible
+   - No TLS for development (added in production)
+   - Bind to all interfaces for local testing
+
+4. **Dialplan Strategy**:
+   - `internal` context: Main development context
+   - Extension 2000: Answer → Playback → Echo → Hangup
+   - Extension 1002: Simple echo test
+   - Invalid extension handler: Prevent misrouting
+   - Modular structure for future expansion
+
+5. **RTP Configuration**:
+   - Port range: 10000-10100 (101 ports)
+   - Sufficient for development testing
+   - No ICE/STUN/DTLS in development (simplicity)
+   - Production will add encryption and NAT traversal
+
+**Why this approach:**
+
+- **Minimal viable telephony**: Just enough to test registration and audio
+- **No Elixir dependency**: Can test with Linphone before ARI integration
+- **Reproducible**: Version-controlled configuration
+- **Safe**: No anonymous access, authentication required
+- **Extensible**: Dialplan structured for future growth
+
+**Consequences:**
+
+- Linphone can register and make test calls
+- Bidirectional audio can be verified
+- Call flow works without AI integration
+- Configuration is isolated from system files
+- Easy to reset/reapply during development
+
+**Future evolution:**
+
+- Phase 3: Replace endpoint 2000 with ARI-controlled call flow
+- Phase 4: Add AudioSocket media transport
+- Phase 11: Add TLS, SRTP, firewall rules
+
+---
+
+## Blockers Update
+
+| # | Blocker | Severity | Resolution path |
+|---|---------|----------|------------|
+| B1 | Asterisk not installed → media/module facts unverified | High (blocks Phase 2+) | **RESOLVED (Phase 2A):** Asterisk 22.5.2 installed; modules verified via `module show` |
+| B2 | `chan_websocket` availability unconfirmed; apt build (22.5.2) predates documented 22.6.0 | Medium | **RESOLVED (Phase 2A):** Confirmed NOT present; AudioSocket selected as primary transport |
+| B3 | ~~Elixir/Mix missing + OTP 29 vs Elixir 1.18 mismatch~~ | ~~High~~ | **RESOLVED (Phase 0.5, ADR-0006):** installed Elixir 1.20.2 (OTP-29 precompiled build); compatibility verified |
+| B4 | No GPU/CUDA + constrained RAM → local heavy inference infeasible | Medium | Offload inference; dev uses tiny models (Piper/faster-whisper-tiny/small Ollama) |
+| B5 | PRoot/Termux: no Docker, systemd not init, UDP/RTP reliability uncertain | Medium | Direct processes in dev (ADR-0007); validate SIP/RTP in Phase 2B; production on VPS |
+| B6 | Linphone testing not completed → telephony not validated | Medium | Phase 2B: Complete manual testing with Linphone device |
+
 No irreversible decisions were made. All choices are reversible based on new evidence from later phases.

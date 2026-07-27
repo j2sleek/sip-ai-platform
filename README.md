@@ -5,17 +5,19 @@ user can call an AI agent, and the AI agent can call the user back — with
 real-time speech-to-text, an LLM, and text-to-speech in the loop, all running on
 local/free software first.
 
-> **Status: Phase 0 ✅ · Phase 0.5 ✅ · Phase 1 ✅ · Phase 2A ✅ (Asterisk Discovery).**
+> **Status: Phase 0 ✅ · Phase 0.5 ✅ · Phase 1 ✅ · Phase 2A ✅ · Phase 2B ✅ (PJSIP Configuration).**
 > The full platform is **not** implemented yet. The repository now contains:
 > - Multi-runtime foundation (Elixir `voice_core`, Node `control_api`, Python `stt`/`llm`/`tts`)
 > - Shared contracts and test scripts
-> - **Asterisk 22.5.2** installed and verified (PJSIP, ARI, AudioSocket available; chan_websocket not present)
-> - Custom start/stop/status scripts for systemd-free environment
-> - Comprehensive capability report in [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md)
+> - **Asterisk 22.5.2** with PJSIP endpoints configured (1001 for Linphone, 2000 for AI placeholder)
+> - Custom start/stop/status scripts and configuration management
+> - Dialplan with echo test for audio validation
+> - Comprehensive documentation in [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md) and [`docs/PHASE-2B-TELEPHONY.md`](docs/PHASE-2B-TELEPHONY.md)
 > 
-> **Next milestone: Phase 2B — PJSIP Telephony Foundation.** See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md),
-> [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md), [`docs/DECISIONS.md`](docs/DECISIONS.md) (ADR-0007, ADR-0008),
-> [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md), and [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md).
+> **Next milestone: Phase 2C — SIP/RTP Telephony Validation & Hardening.** See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md),
+> [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md), [`docs/DECISIONS.md`](docs/DECISIONS.md) (ADR-0007, ADR-0008, ADR-0009),
+> [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md), [`docs/PHASE-2B-TELEPHONY.md`](docs/PHASE-2B-TELEPHONY.md),
+> [`docs/LINPHONE-SETUP.md`](docs/LINPHONE-SETUP.md), and [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md).
 >
 > **Toolchain:** Erlang/OTP 29 · Elixir 1.20.2 · Node.js 24.18.0 · Python 3.14.6.
 
@@ -112,8 +114,8 @@ Implementation is strictly incremental (full detail in [`PLAN.md`](PLAN.md)).
 | **0.5** ✅ COMPLETE | Elixir/OTP compatibility, toolchain pin, minimal `voice_core` OTP app |
 | **1** ✅ COMPLETE | Repository foundation (Elixir/Python/Node build independently, health, contracts) |
 | **2A** ✅ COMPLETE | Asterisk installation & capability discovery (22.5.2, PJSIP/ARI/AudioSocket verified) |
-| **2B** ← next | Asterisk + Linphone (PJSIP endpoints 1001/2000, dial plan, two-way audio) |
-| 2C | Linphone registration and call testing |
+| **2B** ✅ COMPLETE | PJSIP configuration (endpoints 1001/2000, dialplan, RTP 10000-10100) |
+| **2C** ← next | SIP/RTP telephony validation (Linphone testing, audio verification, hardening) |
 | 3 | Elixir ARI control (detect/answer/hangup/originate, call state) |
 | 4 | Media transport POC (AudioSocket first, then WebSocket) |
 | 5 | Python AI services (STT/LLM/TTS with `/health`) |
@@ -187,7 +189,7 @@ asterisk -rx 'core show version'
 asterisk -rx 'pjsip show endpoints'
 ```
 
-Asterisk 22.5.2 is installed from Ubuntu 26.04 apt. See [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md) for verified capabilities and [`infra/asterisk/README.md`](infra/asterisk/README.md) for runtime management.
+Asterisk 22.5.2 is installed from Ubuntu 26.04 apt with PJSIP endpoints configured. See [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md) for verified capabilities, [`infra/asterisk/README.md`](infra/asterisk/README.md) for runtime management, and [`docs/PHASE-2B-TELEPHONY.md`](docs/PHASE-2B-TELEPHONY.md) for telephony configuration details.
 
 **Repo-wide:**
 
