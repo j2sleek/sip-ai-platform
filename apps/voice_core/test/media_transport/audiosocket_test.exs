@@ -16,7 +16,8 @@ defmodule VoiceCore.MediaTransport.AudioSocketTest do
 
     test "parses valid DTMF frame" do
       # DTMF frame: type=2, length=1, payload="5"
-      frame_data = <<2::8, 0::8, 0::8, 1::8, 53::8>>  # 53 is ASCII '5'
+      # 53 is ASCII '5'
+      frame_data = <<2::8, 0::8, 0::8, 1::8, 53::8>>
       result = AudioSocket.parse(frame_data)
       assert result == {:ok, %{type: :dtmf, payload: <<53>>, length: 1}, <<>>}
     end
@@ -29,7 +30,8 @@ defmodule VoiceCore.MediaTransport.AudioSocketTest do
     end
 
     test "returns incomplete when frame header is partial" do
-      partial_header = <<1::8, 0::8>>  # Only 2 bytes of 4-byte header
+      # Only 2 bytes of 4-byte header
+      partial_header = <<1::8, 0::8>>
       result = AudioSocket.parse(partial_header)
       assert result == {:error, :incomplete, partial_header}
     end
@@ -44,7 +46,8 @@ defmodule VoiceCore.MediaTransport.AudioSocketTest do
 
     test "rejects frames larger than max size" do
       # Frame claiming 70000 bytes (exceeds 65535 max)
-      large_header = <<1::8, 1::8, 17::8>>  # 0x010111 = 65809
+      # 0x010111 = 65809
+      large_header = <<1::8, 1::8, 17::8>>
       # Provide 1 byte of payload to make frame complete but oversized
       large_frame = large_header <> <<0>>
       result = AudioSocket.parse(large_frame)
@@ -56,20 +59,27 @@ defmodule VoiceCore.MediaTransport.AudioSocketTest do
       frame1 = <<1::8, 0::8, 0::8, 2::8, 1::8, 2::8>>
       frame2 = <<1::8, 0::8, 0::8, 2::8, 3::8, 4::8>>
       result = AudioSocket.parse_multiple(frame1 <> frame2)
-      assert result == {:ok, [
-        %{type: :audio, payload: <<1, 2>>, length: 2},
-        %{type: :audio, payload: <<3, 4>>, length: 2}
-      ], <<>>}
+
+      assert result ==
+               {:ok,
+                [
+                  %{type: :audio, payload: <<1, 2>>, length: 2},
+                  %{type: :audio, payload: <<3, 4>>, length: 2}
+                ], <<>>}
     end
 
     test "parses partial frame and returns remaining" do
       # Complete frame + partial second frame
       complete = <<1::8, 0::8, 0::8, 2::8, 1::8, 2::8>>
-      partial = <<1::8, 0::8>>  # Only 2 bytes of next header
+      # Only 2 bytes of next header
+      partial = <<1::8, 0::8>>
       result = AudioSocket.parse_multiple(complete <> partial)
-      assert result == {:ok, [
-        %{type: :audio, payload: <<1, 2>>, length: 2}
-      ], partial}
+
+      assert result ==
+               {:ok,
+                [
+                  %{type: :audio, payload: <<1, 2>>, length: 2}
+                ], partial}
     end
 
     test "extracts audio from audio frame" do
@@ -111,7 +121,8 @@ defmodule VoiceCore.MediaTransport.AudioSocketTest do
 
     test "creates silence frame" do
       {:ok, frame} = AudioSocket.create_silence_frame()
-      assert byte_size(frame) == 324  # 4 byte header + 320 bytes payload
+      # 4 byte header + 320 bytes payload
+      assert byte_size(frame) == 324
       assert is_binary(frame)
     end
   end

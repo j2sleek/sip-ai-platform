@@ -7,7 +7,18 @@ defmodule VoiceCore.CallSession do
   require Logger
 
   # State: :new, :ringing, :answered, :active, :ending, :ended
-  defstruct [:call_id, :caller_id, :destination, :source, :state, :media_session, :start_time]
+  defstruct [
+    :call_id,
+    :caller_id,
+    :destination,
+    :source,
+    :state,
+    :media_session,
+    :start_time,
+    :channel_id,
+    :channel_state,
+    :last_event_time
+  ]
 
   # --- Struct API (Pure Functions for Testing) ---
 
@@ -18,7 +29,8 @@ defmodule VoiceCore.CallSession do
       caller_id: caller_id,
       destination: destination,
       state: :new,
-      start_time: System.system_time(:millisecond)
+      start_time: System.system_time(:millisecond),
+      last_event_time: System.system_time(:millisecond)
     }
   end
 
@@ -30,7 +42,60 @@ defmodule VoiceCore.CallSession do
   def active?(session), do: session.state in [:active, :connected, :media_active]
   def ended?(session), do: session.state == :ended
 
-  # --- GenServer API ---
+  # --- ARI Event Handler ---
+
+  @impl true
+  def handle_info({:ari_event, event}, state) do
+    :telemetry.execute([:voice_core, :call_session, :ari_event], %{type: event.type}, %{
+      call_id: state.call_id
+    })
+
+    handle_ari_event(event, state)
+  end
+
+  defp handle_ari_event(%VoiceCore.ARI.Event.StasisStart{channel: channel} = _event, state) do
+    channel_id = channel["id"]
+    Logger.info("ARI StasisStart: #{channel_id}", call_id: state.call_id)
+
+    # Register for channel lookups
+    VoiceCore.CallRegistry.register_channel(channel_id, self())
+
+    new_state = %{
+      state
+      | channel_id: channel_id,
+        channel_state: "StasisStart",
+        last_event_time: System.system_time(:millisecond)
+    }
+
+    {:noreply, new_state}
+  end
+
+  defp handle_ari_event(%VoiceCore.ARI.Event.ChannelStateChange{channel: channel} = _event, state) do
+    Logger.debug("ARI ChannelStateChange: #{channel["id"]}", call_id: state.call_id)
+
+    new_state = %{
+      state
+      | channel_state: channel["state"],
+        last_event_time: System.system_time(:millisecond)
+    }
+
+    {:noreply, new_state}
+  end
+
+  defp handle_ari_event(%VoiceCore.ARI.Event.ChannelDestroyed{} = _event, state) do
+    Logger.info("ARI ChannelDestroyed: #{state.channel_id}", call_id: state.call_id)
+
+    # Cleanup channel registry
+    if state.channel_id, do: VoiceCore.CallRegistry.unregister_channel(state.channel_id)
+
+    new_state = %{state | state: :ended, last_event_time: System.system_time(:millisecond)}
+    {:stop, :normal, new_state}
+  end
+
+  defp handle_ari_event(event, state) do
+    Logger.warning("ARI Unknown Event: #{event.type}", call_id: state.call_id)
+    {:noreply, state}
+  end
 
   def start_link(args) do
     call_id = Map.fetch!(args, :call_id)

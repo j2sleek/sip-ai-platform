@@ -25,7 +25,14 @@ defmodule VoiceCore.CallRegistry do
     end
   end
 
-  def unregister(call_id) do
-    Registry.unregister(__MODULE__, call_id)
+  def register_channel(channel_id, pid) do
+    case Registry.register(__MODULE__, {:channel, channel_id}, pid) do
+      {:ok, _} -> :ok
+      {:error, {:already_registered, _pid}} -> {:error, :already_registered}
+    end
+  end
+
+  def unregister_channel(channel_id) do
+    Registry.unregister(__MODULE__, {:channel, channel_id})
   end
 end

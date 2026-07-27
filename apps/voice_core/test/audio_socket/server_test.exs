@@ -11,6 +11,7 @@ defmodule VoiceCore.AudioSocket.ServerTest do
         host: "127.0.0.1",
         port: 9019
       }
+
       assert config.host == "127.0.0.1"
       assert config.port == 9019
     end
@@ -24,6 +25,7 @@ defmodule VoiceCore.AudioSocket.ServerTest do
         host: "127.0.0.1",
         port: 9019
       }
+
       assert config.host == "127.0.0.1"
       assert config.port == 9019
     end
