@@ -44,9 +44,9 @@ defmodule VoiceCore.MediaTransport.AudioSocketTest do
 
     test "rejects frames larger than max size" do
       # Frame claiming 70000 bytes (exceeds 65535 max)
-      large_header = <<1::8, 0::8, 1::8, 17::8>>  # 0x010111 = 65809
-      # Provide empty payload to trigger length validation
-      large_frame = large_header <> <<>>
+      large_header = <<1::8, 1::8, 17::8>>  # 0x010111 = 65809
+      # Provide 1 byte of payload to make frame complete but oversized
+      large_frame = large_header <> <<0>>
       result = AudioSocket.parse(large_frame)
       assert result == {:error, :frame_too_large, large_frame}
     end
