@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "telephony": {
+      "command": "node",
+      "args": ["/home/projects/sip-ai-platform/apps/telephony_mcp/dist/server.js"],
+      "env": {
+        "CONTROL_API_BASE_URL": "http://127.0.0.1:4001"
+      }
+    }
+  }
+}

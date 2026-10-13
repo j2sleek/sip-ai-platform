@@ -2,11 +2,17 @@ defmodule VoiceCore.Application do
   @moduledoc """
   OTP application entry point for `voice_core`.
 
-  Starts a minimal, intentionally empty supervision tree. Future phases attach
-  supervised children here (ARI connection, call registry, call supervisor,
-  provider supervisor, tool supervisor) as described in
-  `MEDIA-STREAMING-DECISION.md`. In Phase 0.5 the tree has no children — its only
-  job is to prove the OTP foundation starts and stops cleanly.
+  Supervision tree (all `:one_for_one` — a child crash restarts only that child):
+
+    * `VoiceCore.CallRegistry`     — OTP Registry keyed by call_id / channel /
+                                     media ids
+    * `VoiceCore.CallSupervisor`   — DynamicSupervisor for per-call processes
+    * `VoiceCore.AudioSocket.Server` — TCP AudioSocket media server
+    * `VoiceCore.ARIConnection`    — optional ARI WebSocket client, started
+                                     only when `ARI_ENABLED=true`
+
+  The tree is deliberately Asterisk-agnostic: it boots cleanly with no
+  telephony present (dev, CI, tests) and attaches ARI when configured.
   """
 
   use Application
@@ -15,27 +21,30 @@ defmodule VoiceCore.Application do
 
   @impl true
   def start(_type, _args) do
-    # AudioSocket server configuration
-    audiosocket_config = %{
-      host: "127.0.0.1",
-      port: 9019
-    }
+    audiosocket_config =
+      Application.get_env(:voice_core, :audiosocket, host: "127.0.0.1", port: 9019)
+      |> Map.new()
 
     children = [
-      # Registry for tracking active calls
       {Registry, keys: :unique, name: VoiceCore.CallRegistry},
-      # Supervisor for individual call sessions
-      {VoiceCore.CallSupervisor, []},
-      # AudioSocket server for bidirectional PCM audio transport
+      VoiceCore.CallSupervisor,
       {VoiceCore.AudioSocket.Server, audiosocket_config}
     ]
 
-    # `:one_for_one` — when a child crashes only that child is restarted. This
-    # is the correct default for the independent, isolated subsystems this tree
-    # will later supervise.
-    opts = [strategy: :one_for_one, name: VoiceCore.Supervisor]
+    children =
+      if Application.get_env(:voice_core, :ari, [])[:enabled] do
+        ari_config = Application.get_env(:voice_core, :ari) |> Map.new()
+        children ++ [{VoiceCore.ARIConnection, ari_config}]
+      else
+        children
+      end
 
-    Logger.info("VoiceCore starting supervision tree")
+    opts = [strategy: :one_for_one, name: VoiceCore.Supervisor]
+    Logger.info("VoiceCore starting supervision tree (ari_enabled=#{ari_enabled?()})")
     Supervisor.start_link(children, opts)
+  end
+
+  defp ari_enabled? do
+    Application.get_env(:voice_core, :ari, [])[:enabled] == true
   end
 end

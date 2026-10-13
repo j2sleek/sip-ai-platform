@@ -1,38 +1,39 @@
 defmodule VoiceCore.ARIConnection do
   @moduledoc """
-  Supervised connection to Asterisk ARI WebSocket.
+  Supervised WebSocket client to the Asterisk ARI `/ari/events` stream.
+
+  Started only when `ARI_ENABLED=true` (see `config/runtime.exs`), so the app
+  boots cleanly without telephony. Uses `WebSockex` with automatic reconnection:
+  a failed connect surfaces as `{:error, reason}` (supervisor restarts it) and a
+  dropped connection reconnects with bounded backoff — never a silent dummy
+  process (see ADR-0010 / AGENTS.md rule 13).
   """
 
   use WebSockex
   require Logger
 
-  # --- API ---
+  # ─── API ────────────────────────────────────────────────────────────────────
 
+  @spec start_link(map()) :: GenServer.on_start()
   def start_link(config) do
-    # Initiate connection
-    case do_connect(config) do
-      {:ok, pid} ->
-        {:ok, pid}
+    url = "#{config[:url]}/ari/events?app=#{config[:app]}"
+    headers = [{"Authorization", "Basic " <> Base.encode64("#{config[:user]}:#{config[:pass]}")}]
 
-      {:error, reason} ->
-        Logger.error("ARI connection failed: #{inspect(reason)}")
-        # Start a dummy process or handle failure more robustly to keep supervisor alive
-        {:ok, spawn(fn -> Process.sleep(:infinity) end)}
-    end
+    WebSockex.start_link(url, __MODULE__, %{config: config, reconnect_attempts: 0},
+      extra_headers: headers,
+      name: __MODULE__
+    )
+  catch
+    :exit, reason -> {:error, {:websockex_start_failed, reason}}
   end
 
-  defp do_connect(config) do
-    url = "#{config.url}/ari/events?app=#{config.app}"
-    headers = [{"Authorization", "Basic #{Base.encode64("#{config.user}:#{config.pass}")}"}]
-    WebSockex.start_link(url, __MODULE__, config, extra_headers: headers, name: __MODULE__)
-  end
-
-  # --- WebSockex Callbacks ---
+  # ─── WebSockex callbacks ─────────────────────────────────────────────────────
 
   @impl true
   def handle_connect(_conn, state) do
     Logger.info("ARI WebSocket connected")
-    {:ok, state}
+    :telemetry.execute([:voice_core, :ari, :connected], %{})
+    {:ok, Map.put(state, :reconnect_attempts, 0)}
   end
 
   @impl true
@@ -53,6 +54,23 @@ defmodule VoiceCore.ARIConnection do
   @impl true
   def handle_disconnect(disconnect_info, state) do
     Logger.warning("ARI WebSocket disconnected: #{inspect(disconnect_info)}")
-    {:ok, state}
+
+    case state.reconnect_attempts do
+      attempts when attempts < 5 ->
+        backoff = (500 * :math.pow(2, attempts)) |> round()
+        Process.send_after(self(), :reconnect_now, backoff)
+        {:ok, Map.put(state, :reconnect_attempts, attempts + 1)}
+
+      _ ->
+        # Permanent failure after bounded retries — let the supervisor restart.
+        {:stop, :permanent_disconnect}
+    end
   end
+
+  @impl true
+  def handle_info(:reconnect_now, state) do
+    {:reconnect, state}
+  end
+
+  def handle_info(_msg, state), do: {:ok, state}
 end

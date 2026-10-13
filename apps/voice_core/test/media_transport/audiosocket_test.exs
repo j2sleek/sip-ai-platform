@@ -141,4 +141,38 @@ defmodule VoiceCore.MediaTransport.AudioSocketTest do
       assert is_tuple(result)
     end
   end
+
+  describe "parse_multiple/1" do
+    test "decodes back-to-back frames and keeps the trailing partial" do
+      audio = <<1::8, 0::8, 0::8, 2::8, 9::8, 8::8>>
+      partial = <<2::8, 0::8, 0::8, 1::8>>
+      {:ok, frames, remaining} = AudioSocket.parse_multiple(audio <> partial)
+
+      assert [%{type: :audio, payload: <<9, 8>>}] = frames
+      assert remaining == partial
+    end
+  end
+
+  describe "extract_audio/1" do
+    test "returns the payload for audio frames" do
+      assert AudioSocket.extract_audio(%{type: :audio, payload: <<1, 2>>}) == {:ok, <<1, 2>>}
+    end
+
+    test "rejects non-audio frames" do
+      assert AudioSocket.extract_audio(%{type: :dtmf, payload: <<53>>}) ==
+               {:error, :not_audio_frame}
+    end
+  end
+
+  describe "MediaTransport behaviour" do
+    test "declares the audiosocket transport name" do
+      assert AudioSocket.transport_name() == :audiosocket
+    end
+
+    test "stats/0 delegates to the running AudioSocket server" do
+      stats = AudioSocket.stats()
+      assert is_map(stats)
+      assert Map.has_key?(stats, :connections)
+    end
+  end
 end

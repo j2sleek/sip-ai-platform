@@ -371,3 +371,125 @@ install OTP 29 + Elixir 1.20.2 natively from one source; the pin transfers direc
 | B6 | Linphone testing not completed → telephony not validated | Medium | Phase 2B: Complete manual testing with Linphone device |
 
 No irreversible decisions were made. All choices are reversible based on new evidence from later phases.
+
+---
+
+## ADR-0010 — OpenCode as the conversational brain, via a telephony MCP server
+
+**Status:** Accepted (Phase 6)
+
+**Context:** The product vision is a live, bidirectional voice meeting where an
+AI can plan and discuss features with the user, and can call the user with
+updates on dev tasks. Rather than build a bespoke agent loop and a bespoke tool
+surface, we can reuse OpenCode (a coding agent) as the **brain** and let it drive
+the voice platform through the Model Context Protocol (MCP).
+
+**Decision:** Split the voice agent into two halves with a clean boundary:
+
+- **Brain** — OpenCode, extended with a **telephony MCP server**
+  (`apps/telephony_mcp`) that exposes `originate_call`, `speak`,
+  `wait_for_input`, `hangup`, `get_transcript`, and a `call://{id}/transcript`
+  resource. The brain reasons and decides *what* to say and do.
+- **Body** — stays in the platform: Asterisk (SIP/RTP), `voice_core` (per-call
+  sessions, media, turn-taking, barge-in), and Python `stt`/`tts`/`vad`/`llm`.
+  The body owns real-time audio and endpointing.
+
+Voice therefore becomes **one more I/O modality for the brain**, not a separate
+agent implementation. MCP is the integration seam.
+
+**Consequences:**
+
+- The real-time loop (AudioSocket media, endpointing, barge-in) stays in the
+  Elixir/Python runtimes where latency and concurrency are managed; the brain is
+  not in the audio path.
+- `control_api` owns the HTTP call surface the MCP server drives; the MCP server
+  is a thin, stateless adapter (owns no call state).
+- Requires Asterisk to be present for real calls; a `simulated` backend lets the
+  entire brain-side loop run and be tested with no telephony stack.
+
+**Alternatives considered:** a bespoke in-Elixir agent with custom tool calling
+(rejected: duplicates a coding agent we already run and couples the brain to the
+media runtime); n8n as the orchestrator (rejected for the real-time loop; still
+fine for non-real-time business automation).
+
+---
+
+## ADR-0011 — Lightweight, dependency-free providers with external backends
+
+**Status:** Accepted (Phase 6)
+
+**Context:** The platform must run end-to-end on a constrained host (ARM64,
+proot, no GPU) while remaining production-ready. Bundling model weights or heavy
+Python frameworks would make the foundation slow and fragile.
+
+**Decision:** Every Python service (`stt`, `llm`, `tts`, `vad`) is **standard
+library only** and exposes a swappable provider interface:
+
+- **`stt`** — `mock` (default) | `command` (e.g. whisper.cpp on stdin/stdout).
+- **`llm`** — `mock` (default, echoes) | `ollama` (`/api/chat`, explicit timeout).
+- **`tts`** — `mock` (default, deterministic tone) | `command` (e.g. Piper).
+- **`vad`** — `energy` (RMS; default). The Elixir core keeps its own pure energy
+  VAD in `VoiceCore.VoiceAgent.Turn`.
+
+Mock providers make the whole platform runnable and testable with zero downloads
+and zero secrets. Real backends are opt-in via environment variables, and remain
+external processes/services (AGENTS.md rule 15: no heavy inference on the BEAM).
+
+**Audio wire format:** 16-bit signed PCM, **big-endian**, mono — matching the
+AudioSocket transport. `tts` returns `audio/pcm`; `stt` accepts raw PCM.
+
+**Consequences:** Fast CI, no model downloads in the foundation, and a trivial
+path to swap in real backends. Limitation: mock audio is not real speech; no
+sample-rate conversion (documented per service).
+
+---
+
+## ADR-0012 — Outbound call control: control_api surface with simulated/ARI backends
+
+**Status:** Accepted (Phase 6)
+
+**Context:** Outbound calls (the brain calling the user) are a first-class
+requirement. SIP signaling must not live in the AI agent (AGENTS.md rule 2), and
+the environment used for development has no Asterisk.
+
+**Decision:** `control_api` owns the **outbound-call HTTP API** and a pluggable
+`CallBackend`:
+
+- **`simulated`** (default) — a fully in-memory call that emits a realistic event
+  sequence and canned caller utterances. Enables demos/tests with no telephony.
+- **`ari`** — originates/hangs up channels through **Asterisk ARI**
+  (`POST /ari/channels`, `DELETE /ari/channels/{id}`); media/TTS remain owned by
+  `voice_core`. `speak` records the agent utterance and delegates playback to the
+  media pipeline.
+
+Call *control* state and the per-call event log (long-poll `GET
+/api/v1/calls/:id/events`) live in `control_api`; call *media/session* state stays
+in `voice_core`, correlated by `call_id`. The telephony MCP server drives this
+surface.
+
+**Consequences:** The brain-side loop is demonstrable and tested without
+Asterisk; real telephony is a configuration switch. An optional bearer token
+(`CONTROL_API_TOKEN`) guards `/api/v1/*`.
+
+---
+
+## ADR-0013 — Node toolchain: TypeScript 7, Fastify 5, MCP SDK 1.x
+
+**Status:** Accepted (Phase 6)
+
+**Context:** "Latest packages as at October 2026" was requested, but toolchain
+bleeding edges can break builds.
+
+**Decision:** Adopt the latest stable Oct-2026 versions and verify with a real
+build + test:
+
+- `typescript@7.0.2` (native compiler) — **verified** to build `control_api` and
+  `telephony_mcp`. Note: TypeScript 7 requires an explicit `"types": ["node"]`
+  in `tsconfig` for Node globals (auto-inclusion of `@types/*` was not applied).
+- `fastify@5.12.5` (0 audit vulnerabilities after `npm audit fix`).
+- `@modelcontextprotocol/sdk@1.32.1` with `zod@4.6.6` (SDK supports zod `^3.25 || ^4`).
+- `tsx@4.23.x`, `@types/node@26.6.x`, Node `26.10.0`.
+
+**Consequences:** Modern toolchain, verified by CI (`scripts/test-all.sh`).
+Fallback if any version regresses: pin TypeScript `^5.9` (documented in the app
+READMEs/troubleshooting).

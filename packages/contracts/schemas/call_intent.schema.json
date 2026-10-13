@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sip-ai-platform/contracts/v1/CallIntent.json",
+  "title": "CallIntent",
+  "description": "A request to place an outbound call. Produced by the control surface / MCP telephony tools and consumed by the call backend (simulated or Asterisk ARI).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["to"],
+  "properties": {
+    "to": {
+      "type": "string",
+      "description": "Destination: SIP URI, extension, or E.164 number.",
+      "minLength": 1
+    },
+    "from": {
+      "type": "string",
+      "description": "Caller ID presented to the callee. Optional."
+    },
+    "greeting": {
+      "type": "string",
+      "description": "Optional first line the agent speaks when the call is answered."
+    }
+  }
+}

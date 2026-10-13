@@ -1,8 +1,7 @@
-# tts service — Phase 1 dependencies
+# tts runtime deps — standard library only.
 #
-# The Phase 1 foundation runs on the Python 3.14 standard library ONLY.
-# Real TTS dependencies (e.g. piper-tts / onnxruntime) are added in the Python
-# AI services phase — NOT during foundation work.
-#
-# Optional dev tooling (tests use stdlib unittest and don't require it):
+# The service (provider interface, mock tone provider, HTTP server, tests) runs on
+# the Python 3.14 standard library with zero runtime dependencies. Real TTS
+# backends are invoked as external commands (see TTS_PROVIDER=command), so no
+# Python packages are required. Optional dev tooling:
 #   pytest>=8,<10

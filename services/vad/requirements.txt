@@ -1,0 +1,5 @@
+# vad runtime deps — standard library only.
+#
+# The service (energy VAD provider, HTTP server, tests) runs on the Python 3.14
+# standard library with zero runtime dependencies. Optional dev tooling:
+#   pytest>=8,<10

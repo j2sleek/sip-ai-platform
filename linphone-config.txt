@@ -1,0 +1,24 @@
+Linphone SIP Configuration
+==========================
+
+Internal IP (for local testing on same network): 10.214.100.129
+External IP (if behind NAT): 102.89.69.118
+
+Asterisk Configured Accounts:
+- Extension 1001 (Linphone client): 
+  Username: 1001
+  Password: 1001_secure_password_here
+  Domain: 10.214.100.129 (or your Asterisk host IP)
+  Transport: UDP, Port: 5060
+  Context: internal
+
+AI Service (reachable via dial):
+- Extension 2000: Answers with hello-world + Echo test
+- Extension 4000: AudioSocket test (port 9019) - for Phase 3
+
+Auth Flow:
+1. REGISTER -> 401 Challenge (digest auth)
+2. REGISTER with Authorization -> 200 OK (registered)
+3. Can then call other extensions
+
+Use 1001 as your Linphone SIP account. The AI is reachable as extension 2000 (or via platform API/MCP).

@@ -1,9 +1,9 @@
 #!/bin/sh
 # SIP AI Platform — check health of locally running services.
 #
-# Probes GET /health on the HTTP services (control_api, stt, llm, tts) and the
-# in-process health of voice_core. Services that are not running are reported as
-# DOWN, not as errors — this script never starts services and never requires
+# Probes GET /health on the HTTP services (control_api, stt, llm, tts, vad) and
+# the in-process health of voice_core. Services that are not running are reported
+# as DOWN, not as errors — this script never starts services and never requires
 # Asterisk or AI models.
 #
 # Exit code: 0 if every probed service that IS running is healthy; non-zero only
@@ -53,6 +53,7 @@ http_health "control_api" "http://127.0.0.1:${CONTROL_API_PORT:-4000}/health"
 http_health "stt"         "http://127.0.0.1:${STT_PORT:-5001}/health"
 http_health "llm"         "http://127.0.0.1:${LLM_PORT:-5002}/health"
 http_health "tts"         "http://127.0.0.1:${TTS_PORT:-5003}/health"
+http_health "vad"         "http://127.0.0.1:${VAD_PORT:-5004}/health"
 
 # voice_core: in-process health (no HTTP server in Phase 1)
 if command -v mix >/dev/null 2>&1; then

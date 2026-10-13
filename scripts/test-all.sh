@@ -1,9 +1,9 @@
 #!/bin/sh
 # SIP AI Platform — run all runtime test suites.
 #
-# Tests Elixir (voice_core), Python (stt/llm/tts), and Node (control_api).
-# Fails (exit 1) if ANY suite fails. Prints clear per-service banners.
-# Does not touch Asterisk, AI models, or /root/chartcapture-api.
+# Tests Elixir (voice_core), Python (stt/llm/tts/vad), and Node (control_api,
+# telephony_mcp). Fails (exit 1) if ANY suite fails. Prints clear per-service
+# banners. Does not touch Asterisk, AI models, or /root/chartcapture-api.
 #
 # Usage:  sh scripts/test-all.sh
 
@@ -45,8 +45,8 @@ else
   record "voice_core (mix not found)" 1
 fi
 
-# --- Python: stt / llm / tts ------------------------------------------------
-for svc in stt llm tts; do
+# --- Python: stt / llm / tts / vad ------------------------------------------
+for svc in stt llm tts vad; do
   banner "$svc (Python)"
   if command -v python3 >/dev/null 2>&1; then
     (cd "$ROOT/services/$svc" && PYTHONPATH=src python3 -m unittest discover -s tests)
@@ -56,19 +56,21 @@ for svc in stt llm tts; do
   fi
 done
 
-# --- Node: control_api ------------------------------------------------------
-banner "control_api (Node.js)"
-if command -v npm >/dev/null 2>&1; then
-  if [ -d "$ROOT/apps/control_api/node_modules" ]; then
-    (cd "$ROOT/apps/control_api" && npm run build && npm test)
-    record "control_api" $?
+# --- Node: control_api / telephony_mcp --------------------------------------
+for app in control_api telephony_mcp; do
+  banner "$app (Node.js)"
+  if command -v npm >/dev/null 2>&1; then
+    if [ -d "$ROOT/apps/$app/node_modules" ]; then
+      (cd "$ROOT/apps/$app" && npm run build && npm test)
+      record "$app" $?
+    else
+      printf '%s[SKIP]%s %s: run `npm install` in apps/%s first\n' "$R" "$Z" "$app" "$app"
+      FAILED="$FAILED $app(no-node_modules)"
+    fi
   else
-    printf '%s[SKIP]%s control_api: run `npm install` in apps/control_api first\n' "$R" "$Z"
-    FAILED="$FAILED control_api(no-node_modules)"
+    record "$app (npm not found)" 1
   fi
-else
-  record "control_api (npm not found)" 1
-fi
+done
 
 # --- Summary ----------------------------------------------------------------
 banner "SUMMARY"

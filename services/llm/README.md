@@ -1,14 +1,18 @@
 # llm
 
-**Runtime:** Python 3.14 · **Service name:** `llm`
+**Runtime:** Python 3.14 (stdlib only) · **Service name:** `llm`
 
 ## Purpose
 
 LLM inference service. Generates assistant responses from conversation history.
 
-**Phase 1 scope:** foundation only — a health endpoint and a provider interface
-(`generate(messages) -> response`) with a placeholder implementation. **No real
-LLM inference and no model downloads.**
+It exposes `POST /v1/generate` (chat messages in → assistant response out) behind
+a swappable `LLMProvider` interface, plus `GET /health`. The default provider is
+a dependency-free **mock**; a local **Ollama** adapter is selected with
+`LLM_PROVIDER=ollama`.
+
+The wire response is `{"response": "..."}` — the field the Elixir core parses
+(`VoiceCore.Brain.HTTPLLM`).
 
 ## How to run
 
@@ -16,10 +20,29 @@ Zero-dependency (standard library only):
 
 ```sh
 cd services/llm
-PYTHONPATH=src python3 -m llm.server      # http://127.0.0.1:5002/health
+PYTHONPATH=src python3 -m llm.server      # http://127.0.0.1:5002
 ```
 
-Environment: `LLM_HOST` (default `127.0.0.1`), `LLM_PORT` (default `5002`).
+Environment: `LLM_HOST` (default `127.0.0.1`), `LLM_PORT` (default `5002`),
+`LLM_PROVIDER` (`mock` | `ollama`). See `.env.example` for all options.
+
+## API
+
+`POST /v1/generate`
+
+```json
+{ "messages": [ { "role": "user", "content": "book a meeting" } ] }
+```
+
+or `{ "prompt": "book a meeting" }` →
+
+```json
+{ "response": "...", "provider": "mock", "model": "mock-1" }
+```
+
+`GET /health` → `{ "status": "ok", "service": "llm", "version": "0.2.0" }`
+
+Errors are structured: `{"error": {"code": "...", "message": "..."}}`.
 
 ## How to test
 
@@ -29,20 +52,20 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 # or, if pytest is installed:  PYTHONPATH=src pytest
 ```
 
-## Health
+## Ollama
 
-`GET /health` →
-
-```json
-{ "status": "ok", "service": "llm", "version": "0.1.0" }
+```sh
+LLM_PROVIDER=ollama LLM_MODEL=llama3.2 OLLAMA_URL=http://127.0.0.1:11434 \
+  PYTHONPATH=src python3 -m llm.server
 ```
 
 ## Current limitations
 
-- `generate()` raises `NotImplementedError` (placeholder).
-- No model loading and no external API calls.
+- No model weights are bundled or downloaded by this service.
+- No streaming responses yet (single JSON reply); token streaming is a later
+  milestone for lower latency.
 
-## Future responsibilities
+## Related
 
-Local-first LLM (e.g. Ollama adapter, small quantized model) behind the
-`LLMProvider` interface, added in the Python AI services phase.
+- Contracts: `packages/contracts` (AgentMessage, HealthResponse).
+- Caller: Elixir `VoiceCore.Brain.HTTPLLM`.

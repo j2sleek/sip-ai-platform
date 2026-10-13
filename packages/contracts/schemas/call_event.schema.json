@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sip-ai-platform/contracts/v1/CallEvent.json",
+  "title": "CallEvent",
+  "description": "One event in a call's control/transcript log, emitted by control_api and consumed by the telephony MCP server and other integrations. Ordering is per-call via `seq`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["seq", "at", "type", "data"],
+  "properties": {
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic per-call sequence number starting at 1."
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when the event occurred."
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "call.created",
+        "call.ringing",
+        "call.answered",
+        "call.ended",
+        "call.failed",
+        "utterance.user",
+        "utterance.agent",
+        "dtmf"
+      ],
+      "description": "Event kind."
+    },
+    "data": {
+      "type": "object",
+      "description": "Event payload. For utterance.* events this carries `{ \"text\": string }`. No secrets.",
+      "additionalProperties": true
+    }
+  }
+}

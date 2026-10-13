@@ -1,6 +1,5 @@
 defmodule VoiceCore.MediaSessionTest do
   use ExUnit.Case, async: true
-  alias VoiceCore.CallSession
   alias VoiceCore.CallRegistry
 
   test "media session starts with call session" do

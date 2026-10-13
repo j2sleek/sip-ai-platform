@@ -1,8 +1,12 @@
 """stt — Speech-to-Text service for the SIP AI Platform.
 
-Phase 1: foundation only. Provides a health check and a provider interface.
-No real speech-to-text inference and no model downloads.
+Provides `POST /v1/transcribe` (raw PCM in → text out) behind a swappable
+`STTProvider` interface, plus `GET /health`. The default provider is a
+dependency-free mock so the service runs anywhere; real providers (whisper.cpp,
+faster-whisper) are wired via environment variables.
+
+No model weights are bundled or downloaded by this service.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 SERVICE_NAME = "stt"

@@ -327,3 +327,50 @@ For every phase:
 13. Commit the phase.
 
 Never implement future phases without explicit instruction.
+
+---
+
+## Addendum — Brain/body split and the OpenCode MCP integration
+
+The product direction (a live bidirectional voice meeting with an AI that can also
+call you with build updates) led to a deliberate re-slice of Phases 6/7/9 that is
+now implemented. The decision is recorded as **ADR-0010** in
+[`docs/DECISIONS.md`](docs/DECISIONS.md); the vision and demo are in
+[`docs/VOICE-MEETINGS.md`](docs/VOICE-MEETINGS.md).
+
+**Brain/body split**
+
+- **Brain** = OpenCode, extended with the `telephony_mcp` MCP server
+  (`originate_call`, `speak`, `wait_for_input`, `hangup`, `get_transcript`, and a
+  `call://{id}/transcript` resource). The brain decides *what* to say/do.
+- **Body** = the platform's real-time runtimes: Asterisk (SIP/RTP), `voice_core`
+  (per-call sessions, AudioSocket media, turn state, barge-in), and the Python
+  `stt`/`llm`/`tts`/`vad` services. The body owns audio and latency.
+
+**What was implemented**
+
+| Area | Delivered |
+|---|---|
+| Phase 3 (ARI) | `voice_core` ARI connection + channel/turn wiring (config-gated) |
+| Phase 4 (media) | AudioSocket adapter behind `MediaTransport`; event-driven server |
+| Phase 5 (AI svcs) | `stt`/`llm`/`tts`/`vad` HTTP services, stdlib-only, provider interfaces (mock default; whisper.cpp/Ollama/Piper opt-in) |
+| Phase 6 (agent) | `VoiceCore.VoiceAgent` (body) + `VoiceCore.Brain` interface (`Static`, `HTTPLLM`) with `respond/3` |
+| Phase 7 (barge-in) | Endpointing + turn state machine + barge-in detection in `VoiceAgent.Turn` (TTS-cancel wiring is the remaining piece) |
+| Phase 9 (outbound) | `control_api` outbound-call API with `simulated` + `ari` backends; per-call event log + long-poll |
+| MCP brain | `telephony_mcp` MCP stdio server + `demo-voice-loop.mjs` end-to-end demo |
+
+**Verification without Asterisk**
+
+The entire brain-side loop is exercised by real MCP stdio + HTTP with a simulated
+call backend:
+
+```sh
+node apps/telephony_mcp/scripts/demo-voice-loop.mjs
+```
+
+**Still open**
+
+- Phase 2C (Linphone/audio validation) and live Asterisk media E2E.
+- Phase 8 (tool system): `run_n8n_workflow`, `capture_chart`, `get_market_data`.
+- Streaming STT/TTS for lower latency; μ-law/A-law and resampling.
+- Phases 10–13 (observability, security, load, deployment).

@@ -1,8 +1,8 @@
 {
   "name": "control_api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Control API for the SIP AI Platform (Phase 1 foundation)",
+  "description": "Control API + outbound-call surface for the SIP AI Platform",
   "type": "module",
   "engines": {
     "node": ">=20.11.0"
@@ -15,11 +15,11 @@
     "test": "node --test --import tsx \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "fastify": "^5.2.0"
+    "fastify": "^5.12.5"
   },
   "devDependencies": {
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "@types/node": "^22.10.2"
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   }
 }

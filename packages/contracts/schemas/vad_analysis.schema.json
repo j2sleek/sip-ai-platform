@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sip-ai-platform/contracts/v1/VadAnalysis.json",
+  "title": "VadAnalysis",
+  "description": "Result of analysing a PCM buffer for speech presence, returned by the Python vad service (`POST /v1/analyze`).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["speech", "rms", "energy_db", "samples", "duration_ms", "threshold"],
+  "properties": {
+    "speech": {
+      "type": "boolean",
+      "description": "True when the buffer is classified as containing speech."
+    },
+    "rms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Root-mean-square amplitude of the samples."
+    },
+    "energy_db": {
+      "type": "number",
+      "description": "Energy in dBFS (20*log10(rms/32768)); floors at -100 for silence."
+    },
+    "samples": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of 16-bit samples analysed."
+    },
+    "duration_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Buffer duration in milliseconds."
+    },
+    "threshold": {
+      "type": "number",
+      "description": "RMS threshold used to decide `speech`."
+    },
+    "provider": {
+      "type": "string",
+      "description": "VAD provider name (e.g. `energy`)."
+    },
+    "encoding": {
+      "type": "string",
+      "description": "PCM encoding analysed (e.g. `pcm_s16be`)."
+    }
+  }
+}

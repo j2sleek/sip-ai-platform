@@ -5,41 +5,51 @@ user can call an AI agent, and the AI agent can call the user back — with
 real-time speech-to-text, an LLM, and text-to-speech in the loop, all running on
 local/free software first.
 
-> **Status: Phase 0 ✅ · Phase 0.5 ✅ · Phase 1 ✅ · Phase 2A ✅ · Phase 2B ✅ (PJSIP Configuration).**
-> The full platform is **not** implemented yet. The repository now contains:
-> - Multi-runtime foundation (Elixir `voice_core`, Node `control_api`, Python `stt`/`llm`/`tts`)
-> - Shared contracts and test scripts
-> - **Asterisk 22.5.2** with PJSIP endpoints configured (1001 for Linphone, 2000 for AI placeholder)
-> - Custom start/stop/status scripts and configuration management
-> - Dialplan with echo test for audio validation
-> - Comprehensive documentation in [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md) and [`docs/PHASE-2B-TELEPHONY.md`](docs/PHASE-2B-TELEPHONY.md)
-> 
-> **Next milestone: Phase 2C — SIP/RTP Telephony Validation & Hardening.** See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md),
-> [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md), [`docs/DECISIONS.md`](docs/DECISIONS.md) (ADR-0007, ADR-0008, ADR-0009),
-> [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md), [`docs/PHASE-2B-TELEPHONY.md`](docs/PHASE-2B-TELEPHONY.md),
-> [`docs/LINPHONE-SETUP.md`](docs/LINPHONE-SETUP.md), and [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md).
+> **Status: Phase 0 ✅ · 0.5 ✅ · 1 ✅ · 2A ✅ · 2B ✅ · 3 ✅ · 4 ✅ · 5 ✅ · 6 ✅ · 7 ◑ · 9 ◑ · MCP brain ✅.**
+> The platform runs end-to-end in **simulated** mode (no Asterisk required). The
+> repository now contains:
+> - Multi-runtime foundation (Elixir `voice_core`, Node `control_api` +
+>   `telephony_mcp`, Python `stt`/`llm`/`tts`/`vad`)
+> - Elixir: per-call sessions, AudioSocket media transport, turn-taking/barge-in
+>   state machine, brain interface (static / HTTP-LLM)
+> - Python AI services behind swappable providers (mock by default;
+>   whisper.cpp / Ollama / Piper opt-in) — standard library only
+> - Outbound call control (`POST /api/v1/calls`) with `simulated` and `ari` backends
+> - **OpenCode as the brain** via the `telephony_mcp` MCP server — see
+>   [`docs/VOICE-MEETINGS.md`](docs/VOICE-MEETINGS.md)
+> - Shared contracts and repo-wide test/health scripts
 >
-> **Toolchain:** Erlang/OTP 29 · Elixir 1.20.2 · Node.js 24.18.0 · Python 3.14.6.
+> **Not yet done on this host:** live Asterisk media E2E (no Asterisk present),
+> the tool system (Phase 8), streaming STT/TTS, and observability / security /
+> load / deployment (Phases 10–13). See [`PLAN.md`](PLAN.md).
+>
+> **Toolchain (verified on this host):** Erlang/OTP 27 · Elixir 1.18.3 ·
+> Node.js 26.10.0 · npm 11.19.1 · Python 3.14.4. Node apps pin TypeScript 7,
+> Fastify 5.12, and MCP SDK 1.32 (see [`docs/DECISIONS.md`](docs/DECISIONS.md), ADR-0013).
 
 ## Architecture overview
 
 ```text
-Linphone ──SIP/RTP──▶ Asterisk / PJSIP
-                          │
-                          │ ARI (control) + media transport
-                          ▼
+        OpenCode (brain) ──MCP/stdio──▶ telephony_mcp
+                                            │ HTTP /api/v1
+                                            ▼
+Linphone ──SIP/RTP──▶ Asterisk / PJSIP   control_api  (call control + event log)
+                          │                 │ backend: simulated | ari
+                          │ ARI + media     │
+                          ▼                 ▼
                    Elixir / OTP real-time core
                    ├─ call session supervision
                    ├─ media coordination (MediaTransport abstraction)
-                   ├─ agent orchestration
+                   ├─ agent orchestration + turn-taking / barge-in
                    └─ tool routing
                           │
              ┌────────────┴─────────────┐
              ▼                           ▼
    Python AI services         Node.js / TypeScript services
-   ├─ STT (Whisper)           ├─ ChartCapture API
-   ├─ LLM (Ollama)            └─ integrations
-   └─ TTS (Piper)
+   ├─ STT (Whisper)           ├─ control_api (outbound-call API)
+   ├─ LLM (Ollama)            ├─ telephony_mcp (MCP server for the brain)
+   ├─ TTS (Piper)             └─ ChartCapture API (separate project)
+   └─ VAD (energy)
              │
              ▼
      n8n · Supabase/PostgreSQL · external APIs
@@ -50,7 +60,8 @@ Full detail lives in the design docs at the repository root:
 [`MEDIA-STREAMING-DECISION.md`](MEDIA-STREAMING-DECISION.md),
 [`PLAN.md`](PLAN.md), [`AGENTS.md`](AGENTS.md),
 [`TOOL-SPEC.md`](TOOL-SPEC.md), [`API-SPEC.md`](API-SPEC.md),
-[`TESTING.md`](TESTING.md).
+[`TESTING.md`](TESTING.md). The voice-meeting vision is in
+[`docs/VOICE-MEETINGS.md`](docs/VOICE-MEETINGS.md).
 
 ## Technology responsibilities
 
@@ -59,7 +70,8 @@ Full detail lives in the design docs at the repository root:
 | Telephony | **Asterisk / PJSIP** | SIP registration, dial plan, call setup/teardown, RTP, DTMF. **No AI logic.** |
 | Real-time core | **Elixir / OTP** | ARI call control, per-call supervised sessions, media coordination, agent + tool orchestration, Control API, observability. |
 | AI inference | **Python** | STT, LLM adapters, TTS behind stable HTTP APIs. **No SIP state.** |
-| Control / Integrations | **Node.js / TypeScript** | `control_api` (new, in this repo) plus TypeScript integrations. The existing `chartcapture-api` remains a separate, independent project and is **not** modified here. |
+| Control / Integrations | **Node.js / TypeScript** | `control_api` (outbound-call API, call control + event log) and `telephony_mcp` (MCP stdio server exposing call control to the brain). The existing `chartcapture-api` remains a separate, independent project and is **not** modified here. |
+| Brain | **OpenCode + MCP** | Conversational/reasoning "brain" driving voice via the `telephony_mcp` MCP server. Not in the real-time audio path. See [`docs/VOICE-MEETINGS.md`](docs/VOICE-MEETINGS.md). |
 | Automation | **n8n** | Business workflows, external SaaS, notifications. Outside the real-time loop. |
 | Persistence | **Supabase / PostgreSQL** | State where required. |
 
@@ -74,11 +86,13 @@ AudioSocket, with RTP External Media as an interop fallback (see
 sip-ai-platform/
 ├── apps/
 │   ├── voice_core/       # Elixir/OTP real-time core            (service: voice_core)
-│   └── control_api/      # Node/TypeScript/Fastify control API  (service: control_api)
+│   ├── control_api/      # Node/TypeScript/Fastify control API  (service: control_api)
+│   └── telephony_mcp/    # Node MCP server for the brain        (service: telephony_mcp)
 ├── services/
 │   ├── stt/              # Python speech-to-text service        (service: stt)
 │   ├── llm/              # Python LLM adapter service           (service: llm)
-│   └── tts/              # Python text-to-speech service        (service: tts)
+│   ├── tts/              # Python text-to-speech service        (service: tts)
+│   └── vad/              # Python voice-activity service        (service: vad)
 ├── packages/
 │   └── contracts/        # Shared, versioned JSON-Schema contracts
 ├── infra/
@@ -86,10 +100,13 @@ sip-ai-platform/
 │   ├── docker/           # Container definitions (production target)
 │   └── scripts/          # Infra provisioning helpers
 ├── docs/
-│   ├── ENVIRONMENT.md    # Environment report
-│   ├── DECISIONS.md      # Architecture Decision Records
-│   ├── TOOLCHAIN.md      # Pinned toolchain + reproduction
-│   └── DEVELOPMENT.md    # Development workflow
+│   ├── VOICE-MEETINGS.md      # OpenCode-as-brain vision + demo
+│   ├── OPENCODE-INTEGRATION.md # OpenCode + MCP + Linphone integration
+│   ├── TESTING-WITH-REAL-PROVIDERS.md # Testing with cloud providers
+│   ├── ENVIRONMENT.md         # Environment report
+│   ├── DECISIONS.md           # Architecture Decision Records
+│   ├── TOOLCHAIN.md           # Pinned toolchain + reproduction
+│   └── DEVELOPMENT.md         # Development workflow
 ├── scripts/
 │   ├── doctor.sh         # Environment doctor (read-only diagnostics)
 │   ├── test-all.sh       # Run all runtimes' test suites
@@ -101,7 +118,8 @@ sip-ai-platform/
 ```
 
 The design documents and `AGENTS.md` currently live at the repository root.
-Each app/service also has its own `README.md`.
+Each app/service also has its own `README.md`. The end-to-end voice-loop demo is
+`apps/telephony_mcp/scripts/demo-voice-loop.mjs`.
 
 ## Development phases
 
@@ -115,18 +133,31 @@ Implementation is strictly incremental (full detail in [`PLAN.md`](PLAN.md)).
 | **1** ✅ COMPLETE | Repository foundation (Elixir/Python/Node build independently, health, contracts) |
 | **2A** ✅ COMPLETE | Asterisk installation & capability discovery (22.5.2, PJSIP/ARI/AudioSocket verified) |
 | **2B** ✅ COMPLETE | PJSIP configuration (endpoints 1001/2000, dialplan, RTP 10000-10100) |
-| **2C** ← next | SIP/RTP telephony validation (Linphone testing, audio verification, hardening) |
-| 3 | Elixir ARI control (detect/answer/hangup/originate, call state) |
-| 4 | Media transport POC (AudioSocket first, then WebSocket) |
-| 5 | Python AI services (STT/LLM/TTS with `/health`) |
-| 6 | Agent runtime |
-| 7 | Barge-in (VAD, TTS cancellation) |
+| 2C | SIP/RTP telephony validation (Linphone testing, audio verification, hardening) |
+| **3** ✅ COMPLETE | Elixir ARI control (ARI connection + channel events; `voice_core`) |
+| **4** ✅ COMPLETE | Media transport (AudioSocket adapter behind `MediaTransport`) |
+| **5** ✅ COMPLETE | Python AI services (STT/LLM/TTS/VAD behind providers; `/health`) |
+| **6** ✅ COMPLETE | Agent runtime (voice agent body + brain interface; brain/body split) |
+| **7** ◑ PARTIAL | Barge-in (endpointing + turn state machine + barge-in implemented; TTS cancellation to wire) |
 | 8 | Tool system (`run_n8n_workflow`, `capture_chart`, `get_market_data`) |
-| 9 | Outbound calling (`POST /api/v1/calls`) |
+| **9** ◑ PARTIAL | Outbound calling (`POST /api/v1/calls`, `simulated` + `ari` backends, `telephony_mcp`) |
+| **MCP brain** ✅ COMPLETE | OpenCode drives call control via `telephony_mcp` — see [`docs/VOICE-MEETINGS.md`](docs/VOICE-MEETINGS.md) |
 | 10 | Observability |
 | 11 | Security hardening |
 | 12 | Load testing |
 | 13 | Production deployment (Ubuntu VPS) |
+
+✅ = implemented and tested · ◑ = partially implemented on this host (see Notes).
+
+**Notes on partial phases**
+
+- **Phase 7 (barge-in):** the endpointing/turn state machine and barge-in handling
+  are implemented and tested in Elixir; cancelling an in-flight TTS stream when
+  the caller barges in is wired on the next pass.
+- **Phase 9 (outbound):** the outbound-call API, `simulated` and `ari` backends,
+  and the `telephony_mcp` MCP server are implemented and tested. Live calls
+  through Asterisk are not exercised on this host (no Asterisk installed).
+- **Phase 2C** remains open (Linphone/audio validation on the target host).
 
 ## Running the environment doctor
 
@@ -155,13 +186,15 @@ mix deps.get && mix compile --warnings-as-errors && mix test
 mix run -e 'IO.inspect(VoiceCore.health_report())'   # => %{status: "ok", ...}
 ```
 
-**Python — stt / llm / tts** (standard library only, no installs):
+**Python — stt / llm / tts / vad** (standard library only, no installs):
 
 ```sh
-cd services/stt        # or services/llm, services/tts
+cd services/stt        # or services/llm, services/tts, services/vad
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 PYTHONPATH=src python3 -m stt.server                 # GET /health on :5001
 ```
+
+Ports: `stt` :5001 · `llm` :5002 · `tts` :5003 · `vad` :5004.
 
 **Node — control_api**:
 
@@ -170,6 +203,23 @@ cd apps/control_api
 npm install && npm run build && npm test
 npm run dev                                          # GET /health on :4000
 ```
+
+**Node — telephony_mcp** (MCP stdio server for the brain):
+
+```sh
+cd apps/telephony_mcp
+npm install && npm run build && npm test
+CONTROL_API_URL=http://127.0.0.1:4000 node dist/server.js   # speaks MCP on stdio
+```
+
+**Voice-loop demo** (no Asterisk required — starts `control_api` in simulated mode
+and drives `telephony_mcp` over real MCP stdio):
+
+```sh
+node apps/telephony_mcp/scripts/demo-voice-loop.mjs
+```
+
+See [`docs/VOICE-MEETINGS.md`](docs/VOICE-MEETINGS.md) for the full picture.
 
 **Asterisk — telephony core**:
 
@@ -189,7 +239,13 @@ asterisk -rx 'core show version'
 asterisk -rx 'pjsip show endpoints'
 ```
 
-Asterisk 22.5.2 is installed from Ubuntu 26.04 apt with PJSIP endpoints configured. See [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md) for verified capabilities, [`infra/asterisk/README.md`](infra/asterisk/README.md) for runtime management, and [`docs/PHASE-2B-TELEPHONY.md`](docs/PHASE-2B-TELEPHONY.md) for telephony configuration details.
+Asterisk configuration lives under [`infra/asterisk/`](infra/asterisk/) (PJSIP
+endpoints 1001/2000, dialplan, ARI/AudioSocket settings) with start/stop/status
+scripts. **Asterisk is not installed on the current development host**, so live
+calls are not exercised here; the configuration is applied on the target host.
+See [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md) for verified
+capabilities and [`infra/asterisk/README.md`](infra/asterisk/README.md) for
+runtime management.
 
 **Repo-wide:**
 
@@ -200,8 +256,9 @@ sh scripts/health-all.sh    # probe /health of locally running services
 
 Health standard: every service returns
 `{ "status": "ok", "service": "<name>", "version": "<v>" }`
-(contract in [`packages/contracts`](packages/contracts)). Toolchain setup and
-reproduction steps are in [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md).
+(canonical names: `voice_core`, `control_api`, `telephony_mcp`, `stt`, `llm`,
+`tts`, `vad`; contract in [`packages/contracts`](packages/contracts)). Toolchain
+setup and reproduction steps are in [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md).
 
 ## Contributing with an AI coding agent
 
