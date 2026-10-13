@@ -3,8 +3,37 @@ defmodule VoiceCore.ARI.DispatcherTest do
   alias VoiceCore.ARI.Dispatcher
   alias VoiceCore.ARI.Event
 
-  test "dispatches StasisStart" do
-    event = %Event.StasisStart{type: "StasisStart", channel: %{"id" => "123"}}
-    assert Dispatcher.dispatch(event) == {:error, :no_session}
+  describe "StasisStart" do
+    test "starts an isolated session for a new channel and routes to it" do
+      channel_id = "chan-#{System.unique_integer([:positive])}"
+      event = %Event.StasisStart{type: "StasisStart", channel: %{"id" => channel_id}}
+
+      assert :ok = Dispatcher.dispatch(event)
+      assert {:ok, pid} = VoiceCore.CallRegistry.lookup_channel(channel_id)
+      assert is_pid(pid)
+      assert Process.alive?(pid)
+
+      VoiceCore.CallSupervisor.stop_call(pid)
+    end
+  end
+
+  describe "routing for unknown channels" do
+    test "ChannelStateChange is not routed" do
+      event = %Event.ChannelStateChange{
+        type: "ChannelStateChange",
+        channel: %{"id" => "unknown-#{System.unique_integer([:positive])}"}
+      }
+
+      assert Dispatcher.dispatch(event) == {:error, :no_session}
+    end
+
+    test "ChannelDestroyed is not routed" do
+      event = %Event.ChannelDestroyed{
+        type: "ChannelDestroyed",
+        channel: %{"id" => "unknown-#{System.unique_integer([:positive])}"}
+      }
+
+      assert Dispatcher.dispatch(event) == {:error, :no_session}
+    end
   end
 end

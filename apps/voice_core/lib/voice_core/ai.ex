@@ -6,9 +6,13 @@ defmodule VoiceCore.AI do
 
   Contracts (see `packages/contracts`):
 
-    * STT  `POST /v1/transcribe` body = raw 16-bit PCM; response `{"text": ...}`
+    * STT  `POST /v1/transcribe` body = raw 16-bit **little-endian** PCM
+           (`audio/pcm`, WAV-compatible); response `{"text": ...}`
     * TTS  `POST /v1/synthesize`  body = JSON `{"text": ...}`; response raw
-           16-bit PCM (`audio/pcm`) matching the AudioSocket wire format
+           16-bit **big-endian** PCM (`audio/pcm`)
+
+  The core keeps PCM big-endian internally, so `transcribe/2` converts to
+  little-endian at this boundary (`synthesize/2` already receives big-endian).
   """
 
   require Logger
@@ -16,6 +20,9 @@ defmodule VoiceCore.AI do
   @spec transcribe(binary(), pos_integer()) :: {:ok, String.t()} | {:error, term()}
   def transcribe(pcm, timeout_ms \\ 15_000) do
     url = service_url(:stt_url, "http://127.0.0.1:5001")
+
+    # Internal PCM is big-endian; the STT service consumes little-endian PCM.
+    pcm = VoiceCore.PCM.swap16(pcm)
 
     case post_binary(url <> "/v1/transcribe", pcm, timeout_ms) do
       {:ok, 200, body} -> decode_text(body)

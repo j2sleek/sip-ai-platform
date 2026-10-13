@@ -8,10 +8,9 @@ defmodule VoiceCore.AudioSocket.Server do
 
   Call binding:
 
-    * **UUID flow (Asterisk `res_audiosocket`):** if the first frame received is
-      a control frame whose payload is a printable UUID (from an AudioSocket URL
-      query like `?uuid=<call_id>`), audio is routed to the `MediaSession`
-      registered under `{:media, <uuid>}`.
+    * **UUID flow (Asterisk `res_audiosocket`):** the connection opens with a
+      UUID message (kind `0x01`, 16 raw UUID bytes); that UUID is the call id, so
+      audio is routed to the `MediaSession` registered under `{:media, <uuid>}`.
     * **Explicit attach flow (tests / SDK):** `attach(call_id, pid)` binds a
       connection to a receiving process directly.
 
@@ -174,6 +173,10 @@ defmodule VoiceCore.AudioSocket.Server do
         send(pid, :close_connection)
         state
       else
+        # Acknowledge registration *before* the connection process starts
+        # reading, so its first frame can never race `attach/2`.
+        send(pid, :registered)
+
         %{
           state
           | connections: Map.put(state.connections, conn_id, conn),
@@ -210,6 +213,7 @@ defmodule VoiceCore.AudioSocket.Server do
   end
 
   def handle_info({:conn_closed, conn_id}, state) do
+    notify_media_disconnected(state, conn_id)
     {:noreply, %{state | connections: Map.delete(state.connections, conn_id)}}
   end
 
@@ -219,10 +223,18 @@ defmodule VoiceCore.AudioSocket.Server do
       {_pid, accept_ref} = spawn_monitor(fn -> accept_loop(state.listen_socket) end)
       {:noreply, %{state | accept_ref: accept_ref}}
     else
-      # Connection process died — sweep by pid for robustness.
+      # Connection process died — sweep by pid for robustness, and let the call's
+      # media session know its media path is gone.
       connections =
         state.connections
-        |> Enum.reject(fn {_id, conn} -> conn.pid == pid end)
+        |> Enum.reject(fn {id, conn} ->
+          if conn.pid == pid do
+            notify_media_disconnected(state, id)
+            true
+          else
+            false
+          end
+        end)
         |> Map.new()
 
       {:noreply, %{state | connections: connections}}
@@ -280,13 +292,24 @@ defmodule VoiceCore.AudioSocket.Server do
 
   # ─── Per-connection loop ────────────────────────────────────────────────────
 
-  # Waits until the acceptor has transferred the socket, then owns it.
+  # Waits until the acceptor has transferred the socket AND the server has
+  # registered the connection, then owns it. Waiting for `:registered` closes a
+  # race: Asterisk sends the UUID handshake immediately, and processing it calls
+  # `Server.attach/2`; without this the attach could arrive before the server had
+  # recorded the connection (`:unknown_connection`).
   defp connection_await(socket, conn_id) do
     receive do
       {:ready, server_pid} ->
-        :ok = :inet.setopts(socket, active: :once)
-        # handshake_done = false until the first frame is classified.
-        receive_loop(conn_id, nil, nil, false, socket, server_pid, <<>>)
+        receive do
+          :registered ->
+            :ok = :inet.setopts(socket, active: :once)
+            # handshake_done = false until the first frame is classified.
+            receive_loop(conn_id, nil, nil, false, socket, server_pid, <<>>)
+
+          :close_connection ->
+            :gen_tcp.close(socket)
+            :ok
+        end
 
       :close_connection ->
         :gen_tcp.close(socket)
@@ -356,25 +379,56 @@ defmodule VoiceCore.AudioSocket.Server do
     end
   end
 
-  # Classifies the first frame. If it is a control frame with a printable UUID,
-  # adopt it as the routing key (real Asterisk flow); otherwise leave the buffer
-  # intact so it is parsed as ordinary audio/DTMF.
+  # Classifies the first frame. Asterisk `res_audiosocket` opens with a UUID
+  # message (kind 0x01, 16 raw UUID bytes); adopt it as the routing key. Any
+  # other first frame (e.g. audio, for tests/non-Asterisk clients) leaves the
+  # buffer intact so it is parsed as ordinary audio/DTMF.
   defp resolve_handshake(conn_id, uuid, buffer, server_pid) do
     case AudioSocket.parse(buffer) do
-      {:ok, %{type: :control, payload: payload}, remaining} ->
-        if printable_uuid?(payload) do
-          Logger.info("AudioSocket connection #{conn_id} bound via UUID #{payload}")
-          send(server_pid, {:conn_stats, conn_id, %{uuid: payload}})
-          {payload, true, remaining}
-        else
-          {uuid, true, buffer}
-        end
+      {:ok, %{type: :uuid, payload: <<_::binary-size(16)>> = payload}, remaining} ->
+        uuid = AudioSocket.format_uuid(payload)
+
+        Logger.info("AudioSocket #{conn_id}: UUID handshake #{uuid}")
+        send(server_pid, {:conn_stats, conn_id, %{uuid: uuid}})
+        bind_media(uuid, conn_id)
+        {uuid, true, remaining}
+
+      {:ok, _frame, _remaining} ->
+        {uuid, true, buffer}
 
       {:error, :incomplete, _} ->
         {uuid, false, buffer}
 
-      _ ->
+      {:error, _reason, _} ->
         {uuid, true, buffer}
+    end
+  end
+
+  # Hands the connection id to the call's MediaSession, which owns outbound TTS
+  # for this call. Inbound routing also works via the registry fallback in
+  # `media_pid_for/3`, but the explicit bind gives the session a write path.
+  defp bind_media(uuid, conn_id) do
+    case Registry.lookup(VoiceCore.CallRegistry, {:media, uuid}) do
+      [{pid, _}] ->
+        send(pid, {:bind_connection, conn_id})
+        :ok
+
+      [] ->
+        :ok
+    end
+  end
+
+  # Tells the owning MediaSession that its transport went away (the channel was
+  # hung up). This is the reliable end-of-call signal, because once the channel
+  # leaves Stasis for the dialplan AudioSocket app, ARI stops reporting it.
+  defp notify_media_disconnected(state, conn_id) do
+    with {:ok, conn} <- Map.fetch(state.connections, conn_id),
+         uuid when is_binary(uuid) <- conn.uuid,
+         [{pid, _}] <- Registry.lookup(VoiceCore.CallRegistry, {:media, uuid}) do
+      send(pid, :media_disconnected)
+      :ok
+    else
+      _ -> :ok
     end
   end
 
@@ -470,11 +524,6 @@ defmodule VoiceCore.AudioSocket.Server do
       audio_frames:
         Enum.reduce(state.connections, 0, fn {_id, c}, acc -> acc + c.audio_frames end)
     }
-  end
-
-  defp printable_uuid?(payload) do
-    byte_size(payload) in 8..64 and String.printable?(payload) and
-      Regex.match?(~r/^[A-Za-z0-9\-_]+$/, payload)
   end
 
   defp new_conn_id do

@@ -25,6 +25,14 @@ defmodule VoiceCore.CallRegistry do
     end
   end
 
+  @doc "Looks up the session owning an ARI channel id (via `register_channel/2`)."
+  def lookup_channel(channel_id) do
+    case Registry.lookup(__MODULE__, {:channel, channel_id}) do
+      [{pid, _}] -> {:ok, pid}
+      [] -> {:error, :not_found}
+    end
+  end
+
   def register_channel(channel_id, pid) do
     case Registry.register(__MODULE__, {:channel, channel_id}, pid) do
       {:ok, _} -> :ok

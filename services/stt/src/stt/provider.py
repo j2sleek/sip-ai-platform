@@ -50,6 +50,17 @@ DEFAULT_GEMINI_STT_MODEL = "gemini-2.5-flash"
 # but the helper is minimal. For our use cases, 16kHz is reasonable.
 DEFAULT_PCM_SAMPLE_RATE = 16000
 
+# Cloudflare (fronting Groq/OpenRouter) rejects the default python-urllib
+# User-Agent with HTTP 403 / error 1010, so every request carries an explicit UA.
+DEFAULT_USER_AGENT = "sip-ai-platform/0.2.0"
+
+
+def _urlopen(request: urllib.request.Request, timeout: float):
+    """urlopen with a stable User-Agent header."""
+    if not request.has_header("User-agent"):
+        request.add_header("User-Agent", DEFAULT_USER_AGENT)
+    return urllib.request.urlopen(request, timeout=timeout)
+
 
 def _make_wav_header(pcm_bytes: bytes, sample_rate: int = DEFAULT_PCM_SAMPLE_RATE, channels: int = 1, bits_per_sample: int = 16) -> bytes:
     """Create a minimal WAV header for 16-bit PCM audio."""
@@ -82,7 +93,8 @@ class STTProvider(abc.ABC):
     name = "abstract"
 
     @abc.abstractmethod
-    def transcribe(self, audio: bytes) -> str:
+    def transcribe(self, audio: bytes, sample_rate: int = DEFAULT_PCM_SAMPLE_RATE) -> str:
+        """Transcribe raw 16-bit little-endian mono PCM at ``sample_rate`` Hz."""
         raise NotImplementedError
 
 
@@ -91,7 +103,7 @@ class NotImplementedSTTProvider(STTProvider):
 
     name = "not_implemented"
 
-    def transcribe(self, audio: bytes) -> str:
+    def transcribe(self, audio: bytes, sample_rate: int = DEFAULT_PCM_SAMPLE_RATE) -> str:
         raise NotImplementedError("STT inference is not implemented in Phase 1")
 
 
@@ -103,7 +115,7 @@ class MockSTTProvider(STTProvider):
     def __init__(self, text: str | None = None) -> None:
         self._text = text if text is not None else os.environ.get("STT_MOCK_TEXT", DEFAULT_MOCK_TEXT)
 
-    def transcribe(self, audio: bytes) -> str:
+    def transcribe(self, audio: bytes, sample_rate: int = DEFAULT_PCM_SAMPLE_RATE) -> str:
         if not audio:
             return ""
         return self._text
@@ -118,7 +130,7 @@ class CommandSTTProvider(STTProvider):
         self._argv = shlex.split(command)
         self._timeout = timeout_s
 
-    def transcribe(self, audio: bytes) -> str:
+    def transcribe(self, audio: bytes, sample_rate: int = DEFAULT_PCM_SAMPLE_RATE) -> str:
         if not audio:
             return ""
         try:
@@ -161,7 +173,7 @@ class GroqSTTProvider(STTProvider):
         self._model = model
         self._timeout = timeout_s
 
-    def transcribe(self, audio: bytes) -> str:
+    def transcribe(self, audio: bytes, sample_rate: int = DEFAULT_PCM_SAMPLE_RATE) -> str:
         if not audio:
             return ""
 
@@ -173,7 +185,7 @@ class GroqSTTProvider(STTProvider):
             )
         )
         # Send as WAV with minimal header to be compatible with some APIs
-        wav_audio = _make_wav_header(audio) + audio
+        wav_audio = _make_wav_header(audio, sample_rate) + audio
         body_parts.append(
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".encode(
                 "utf-8"
@@ -194,7 +206,7 @@ class GroqSTTProvider(STTProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+            with _urlopen(request, self._timeout) as resp:
                 body = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             raise ProviderError(
@@ -231,7 +243,7 @@ class OpenRouterSTTProvider(STTProvider):
         self._model = model
         self._timeout = timeout_s
 
-    def transcribe(self, audio: bytes) -> str:
+    def transcribe(self, audio: bytes, sample_rate: int = DEFAULT_PCM_SAMPLE_RATE) -> str:
         if not audio:
             return ""
 
@@ -243,7 +255,7 @@ class OpenRouterSTTProvider(STTProvider):
             )
         )
         # Send as WAV with minimal header to be compatible with some APIs
-        wav_audio = _make_wav_header(audio) + audio
+        wav_audio = _make_wav_header(audio, sample_rate) + audio
         body_parts.append(
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".encode(
                 "utf-8"
@@ -266,7 +278,7 @@ class OpenRouterSTTProvider(STTProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+            with _urlopen(request, self._timeout) as resp:
                 body = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             raise ProviderError(
@@ -303,7 +315,7 @@ class GeminiSTTProvider(STTProvider):
         self._timeout = timeout_s
         self._url_template = url_template
 
-    def transcribe(self, audio: bytes) -> str:
+    def transcribe(self, audio: bytes, sample_rate: int = DEFAULT_PCM_SAMPLE_RATE) -> str:
         if not audio:
             return ""
 
@@ -337,7 +349,7 @@ class GeminiSTTProvider(STTProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+            with _urlopen(request, self._timeout) as resp:
                 body = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             raise ProviderError(

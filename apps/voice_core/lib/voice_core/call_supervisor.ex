@@ -15,7 +15,15 @@ defmodule VoiceCore.CallSupervisor do
   end
 
   def start_call(call_id, args) do
-    spec = {VoiceCore.CallSession, Map.put(args, :call_id, call_id)}
+    # `:transient` — restart only on abnormal exit. A CallSession that ends
+    # normally (hangup / transport closed) must NOT be restarted, or every call
+    # would respawn itself forever.
+    spec = %{
+      id: VoiceCore.CallSession,
+      start: {VoiceCore.CallSession, :start_link, [Map.put(args, :call_id, call_id)]},
+      restart: :transient
+    }
+
     DynamicSupervisor.start_child(__MODULE__, spec)
   end
 

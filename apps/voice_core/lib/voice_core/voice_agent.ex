@@ -101,18 +101,7 @@ defmodule VoiceCore.VoiceAgent do
       call_id: state.call_id
     )
 
-    entry = %{role: :agent, text: text, at: System.system_time(:millisecond)}
-    state = %{state | transcript: [entry | state.transcript], mode: :speaking}
-    agent = self()
-
-    spawn(fn ->
-      case state.ai.synthesize(text, state.tts_timeout_ms) do
-        {:ok, pcm} -> send(agent, {:tts_ready, pcm})
-        {:error, reason} -> send(agent, {:tts_failed, reason})
-      end
-    end)
-
-    {:noreply, state}
+    {:noreply, start_speaking(text, state)}
   end
 
   def handle_info({:agent_reply, {:error, reason}}, state) do
@@ -123,6 +112,16 @@ defmodule VoiceCore.VoiceAgent do
     )
 
     {:noreply, %{state | mode: :idle}}
+  end
+
+  # The brain bridge (control_api / OpenCode via MCP) asked us to speak text.
+  # Same playback path as an LLM reply; barge-in still applies.
+  def handle_info({:speak, text}, state) when is_binary(text) do
+    Logger.info("VoiceAgent #{state.call_id}: speak requested (#{byte_size(text)} chars)",
+      call_id: state.call_id
+    )
+
+    {:noreply, start_speaking(text, state)}
   end
 
   def handle_info({:tts_ready, pcm}, state) when byte_size(pcm) > 0 do
@@ -221,6 +220,10 @@ defmodule VoiceCore.VoiceAgent do
   end
 
   defp kick_processing(pcm, state) do
+    # A previous turn's watchdog may still be pending; replace it so a stale
+    # `:processing_timeout` can't flip a later (or speaking) turn to idle.
+    cancel_timer(state.processing_timer)
+
     agent = self()
     stt_timeout = state.stt_timeout_ms
     llm_timeout = state.llm_timeout_ms
@@ -237,6 +240,7 @@ defmodule VoiceCore.VoiceAgent do
             )
 
             send(agent, {:utterance, text})
+            VoiceCore.ControlApi.report(call_id, "utterance.user", %{"text" => text})
             brain.respond(text, %{call_id: call_id}, llm_timeout)
 
           {:error, reason} ->
@@ -249,6 +253,28 @@ defmodule VoiceCore.VoiceAgent do
     timeout = state.stt_timeout_ms + state.llm_timeout_ms + 5_000
     timer = Process.send_after(self(), :processing_timeout, timeout)
     %{state | processing_timer: timer}
+  end
+
+  # Records an agent utterance, reports it to control_api, and synthesizes +
+  # plays it. Shared by LLM replies and bridge-injected `{:speak, ...}`.
+  defp start_speaking(text, state) do
+    entry = %{role: :agent, text: text, at: System.system_time(:millisecond)}
+
+    if text != "" do
+      VoiceCore.ControlApi.report(state.call_id, "utterance.agent", %{text: text})
+    end
+
+    state = %{state | transcript: [entry | state.transcript], mode: :speaking}
+    agent = self()
+
+    spawn(fn ->
+      case state.ai.synthesize(text, state.tts_timeout_ms) do
+        {:ok, pcm} -> send(agent, {:tts_ready, pcm})
+        {:error, reason} -> send(agent, {:tts_failed, reason})
+      end
+    end)
+
+    state
   end
 
   defp cancel_tts(state) do

@@ -18,7 +18,21 @@ export type CallEventType =
   | "call.failed"
   | "utterance.user"
   | "utterance.agent"
+  | "agent.speak"
   | "dtmf";
+
+/**
+ * Event types that voice_core (the media body) is allowed to ingest via
+ * `POST /api/v1/calls/:id/events`. `agent.speak` is deliberately excluded: it is
+ * a brain→body instruction, never a body→control event.
+ */
+export const INGEST_EVENT_TYPES: readonly CallEventType[] = [
+  "utterance.user",
+  "utterance.agent",
+  "call.answered",
+  "call.ended",
+  "call.failed",
+];
 
 export interface CallEvent {
   /** Monotonic per-call sequence number, starting at 1. */

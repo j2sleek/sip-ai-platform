@@ -42,7 +42,10 @@ defmodule VoiceCore.ARIConnection do
 
     case VoiceCore.ARI.Decoder.decode(msg) do
       {:ok, event} ->
-        VoiceCore.ARI.Dispatcher.dispatch(event)
+        dispatch_safely(event)
+
+      {:ignore, type} ->
+        Logger.debug("ARI event ignored: #{type}")
 
       {:error, reason} ->
         Logger.error("ARI event decoding failed: #{inspect(reason)}")
@@ -73,4 +76,16 @@ defmodule VoiceCore.ARIConnection do
   end
 
   def handle_info(_msg, state), do: {:ok, state}
+
+  # A malformed/unexpected event must never tear down the long-lived event
+  # stream — losing it silently drops every later StasisStart (a hung call).
+  # Programming errors stay visible in the log (AGENTS.md rule 13).
+  defp dispatch_safely(event) do
+    VoiceCore.ARI.Dispatcher.dispatch(event)
+  rescue
+    error ->
+      Logger.error("ARI dispatch failed for #{inspect(event.type)}: #{Exception.message(error)}")
+
+      :error
+  end
 end

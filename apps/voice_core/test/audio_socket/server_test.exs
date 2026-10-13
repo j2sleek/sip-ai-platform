@@ -99,21 +99,21 @@ defmodule VoiceCore.AudioSocket.ServerTest do
 
     assert :ok = Server.send_audio(conn_id, <<7, 7, 7>>)
     assert {:ok, data} = :gen_tcp.recv(socket, 0, 2_000)
-    assert data == <<1::8, 0::8, 0::8, 3::8, 7, 7, 7>>
+    assert data == <<0x10::8, 0x00::8, 0x03::8, 7, 7, 7>>
     :gen_tcp.close(socket)
   end
 
-  test "binds a connection via the UUID control frame (Asterisk flow)" do
+  test "binds a connection via the UUID handshake frame (Asterisk flow)" do
     # A MediaSession would register {:media, uuid}; emulate the receiver here.
-    uuid = "call-uuid-#{System.unique_integer([:positive])}"
+    uuid = VoiceCore.ARI.new_uuid()
     Registry.register(VoiceCore.CallRegistry, {:media, uuid}, self())
 
     socket = connect()
     _conn_id = await_conn()
 
-    control = <<3::8, 0::8, 0::8, byte_size(uuid)::8, uuid::binary>>
+    {:ok, handshake} = AudioSocket.create_uuid_frame(uuid)
     {:ok, audio} = AudioSocket.create_audio_frame(<<5, 5>>)
-    :ok = :gen_tcp.send(socket, control <> audio)
+    :ok = :gen_tcp.send(socket, handshake <> audio)
 
     assert_receive {:audio_frame_rx, <<5, 5>>}, 2_000
     :gen_tcp.close(socket)

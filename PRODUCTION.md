@@ -108,3 +108,12 @@ tail -f run/*.log
 
 Never commit `.env`, `infra/asterisk/.ari_password`, or any other secret
 (see `AGENTS.md` → Security).
+
+## 6. Verify a live call
+
+See [`docs/LIVE-CALL-VERIFICATION.md`](docs/LIVE-CALL-VERIFICATION.md) for the
+proven end-to-end path (real Linphone → Asterisk → AudioSocket → STT/LLM/TTS →
+caller), the AudioSocket protocol facts, and copy-paste reproduction commands —
+including a **synthetic self-test** (`asterisk -rx "channel originate
+Local/2000@internal application Echo"`) that exercises the full loop without a
+phone.

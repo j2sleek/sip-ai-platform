@@ -8,6 +8,7 @@
  *   POST /api/v1/calls/:id/speak      have the agent speak text
  *   POST /api/v1/calls/:id/hangup     end the call
  *   GET  /api/v1/calls/:id/events     long-poll for new events (transcript)
+ *   POST /api/v1/calls/:id/events     ingest events from the media body (voice_core)
  */
 
 import type { FastifyInstance } from "fastify";
@@ -16,7 +17,7 @@ import type { Config } from "../config.js";
 import type { CallBackend } from "../calls/backend.js";
 import type { CallRegistry } from "../calls/registry.js";
 import { AriError } from "../calls/ari.js";
-import type { CallRecord } from "../calls/types.js";
+import { INGEST_EVENT_TYPES, type CallEventType, type CallRecord } from "../calls/types.js";
 
 interface CallsDeps {
   config: Config;
@@ -116,6 +117,44 @@ export function callsRoutes(deps: CallsDeps) {
         } catch (err) {
           return sendBackendError(reply, "hangup", err);
         }
+      },
+    );
+
+    // Ingest: the media body (voice_core) reports call/transcript progress here.
+    app.post<{ Params: { id: string } }>(
+      "/api/v1/calls/:id/events",
+      async (request, reply) => {
+        const call = registry.get(request.params.id);
+        if (!call) {
+          return reply
+            .code(404)
+            .send({ error: { code: "not_found", message: "unknown call" } });
+        }
+
+        const body = (request.body ?? {}) as { type?: unknown; data?: unknown };
+        const type = typeof body.type === "string" ? body.type : "";
+        if (!(INGEST_EVENT_TYPES as readonly string[]).includes(type)) {
+          return reply.code(400).send({
+            error: {
+              code: "bad_request",
+              message: `unsupported event type: ${JSON.stringify(body.type)}`,
+            },
+          });
+        }
+
+        const data =
+          body.data !== null &&
+          typeof body.data === "object" &&
+          !Array.isArray(body.data)
+            ? (body.data as Record<string, unknown>)
+            : {};
+
+        if (type === "call.answered") registry.setState(call.id, "answered");
+        if (type === "call.ended") registry.setState(call.id, "ended");
+        if (type === "call.failed") registry.setState(call.id, "failed");
+
+        const event = registry.append(call.id, type as CallEventType, data);
+        return reply.code(202).send({ event });
       },
     );
 

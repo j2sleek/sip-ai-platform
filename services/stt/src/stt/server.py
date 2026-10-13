@@ -99,7 +99,7 @@ class _Handler(BaseHTTPRequestHandler):
 
             sample_rate = int(params.get("sample_rate", "8000"))
             started = time.perf_counter()
-            text = _get_provider().transcribe(audio)
+            text = _get_provider().transcribe(audio, sample_rate)
             elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
 
             _log(

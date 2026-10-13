@@ -19,6 +19,7 @@
 #   LLM_PROVIDER STT_PROVIDER TTS_PROVIDER
 #   LLM_MODEL STT_GROQ_MODEL TTS_GROQ_MODEL TTS_GROQ_VOICE
 #   PORT HOST ARI_USERNAME ARI_APP ARI_BASE_URL
+#   VOICE_BRAIN CONTROL_API_ENABLED CONTROL_API_URL AGENT_GREETING
 #
 set -euo pipefail
 
@@ -47,10 +48,10 @@ export CALL_BACKEND=ari
 export LLM_PROVIDER="${LLM_PROVIDER:-groq}"
 export STT_PROVIDER="${STT_PROVIDER:-groq}"
 export TTS_PROVIDER="${TTS_PROVIDER:-groq}"
-export LLM_MODEL="${LLM_MODEL:-llama-3.3-70b-versatile}"
+export LLM_MODEL="${LLM_MODEL:-openai/gpt-oss-20b}"
 export STT_GROQ_MODEL="${STT_GROQ_MODEL:-whisper-large-v3-turbo}"
-export TTS_GROQ_MODEL="${TTS_GROQ_MODEL:-openai/tts-1}"
-export TTS_GROQ_VOICE="${TTS_GROQ_VOICE:-alloy}"
+export TTS_GROQ_MODEL="${TTS_GROQ_MODEL:-canopylabs/orpheus-v1-english}"
+export TTS_GROQ_VOICE="${TTS_GROQ_VOICE:-autumn}"
 
 for provider in "$LLM_PROVIDER" "$STT_PROVIDER" "$TTS_PROVIDER"; do
   if [ "$provider" = "groq" ] && [ -z "${GROQ_API_KEY:-}" ]; then
@@ -61,6 +62,20 @@ done
 # ─── Ports ──────────────────────────────────────────────────────────────────
 export PORT="${PORT:-4001}"
 export HOST="${HOST:-127.0.0.1}"
+
+# ─── voice_core ↔ control_api bridge + brain ────────────────────────────────
+# voice_core is the body (media + STT/TTS). By default it drives turn-taking with
+# the local `llm` service ("hybrid" mode) while ALSO reporting the live transcript
+# to control_api and obeying `agent.speak` instructions from it — which is how
+# OpenCode drives a call through the telephony MCP tools.
+export VOICE_BRAIN="${VOICE_BRAIN:-llm}"
+export CONTROL_API_ENABLED="${CONTROL_API_ENABLED:-true}"
+export CONTROL_API_URL="${CONTROL_API_URL:-http://127.0.0.1:${PORT}}"
+export AGENT_GREETING="${AGENT_GREETING:-Hello, this is the AI assistant. How can I help you?}"
+
+# ─── AudioSocket media endpoint (must match the [ai] dialplan context) ──────
+export AUDIOSOCKET_BIND_HOST="${AUDIOSOCKET_BIND_HOST:-127.0.0.1}"
+export AUDIOSOCKET_BIND_PORT="${AUDIOSOCKET_BIND_PORT:-9019}"
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 stop_pidfile() {
@@ -91,8 +106,14 @@ start_python() {
   local svc="$1" venv="$ROOT/services/$1/.venv"
   [ -x "$venv/bin/python" ] || die "missing venv for $svc; run ./install_full.sh"
   # setsid + /dev/null detach the service so it does not hold the caller's stdio.
-  ( cd "$ROOT/services/$svc" && PYTHONPATH=src setsid "$venv/bin/python" -m "$svc.server" \
-      </dev/null > "$RUN_DIR/$svc.log" 2>&1 & echo $! > "$RUN_DIR/$svc.pid" )
+  # NOTE: cd must be a separate statement from the backgrounded command so that
+  # $! captures the server PID (not a short-lived `cd && ...` subshell).
+  (
+    cd "$ROOT/services/$svc" || exit 1
+    export PYTHONPATH=src
+    setsid "$venv/bin/python" -m "$svc.server" </dev/null > "$RUN_DIR/$svc.log" 2>&1 &
+    echo $! > "$RUN_DIR/$svc.pid"
+  )
   log "started $svc (PID $(cat "$RUN_DIR/$svc.pid"))"
 }
 
@@ -117,13 +138,18 @@ start_python vad
 
 # ─── control_api (Node) ─────────────────────────────────────────────────────
 [ -f "$ROOT/apps/control_api/dist/server.js" ] || die "control_api not built; run ./install_full.sh"
-( cd "$ROOT/apps/control_api" && setsid node dist/server.js </dev/null > "$RUN_DIR/control_api.log" 2>&1 & echo $! > "$RUN_DIR/control_api.pid" )
+( cd "$ROOT/apps/control_api" && (
+    setsid node dist/server.js </dev/null > "$RUN_DIR/control_api.log" 2>&1 &
+    echo $! > "$RUN_DIR/control_api.pid"
+  ) )
 log "control_api starting (PID $(cat "$RUN_DIR/control_api.pid"))"
 
 # ─── voice_core (Elixir/OTP) ────────────────────────────────────────────────
 if command -v mix >/dev/null 2>&1; then
-  ( cd "$ROOT/apps/voice_core" && MIX_ENV="${MIX_ENV:-prod}" setsid mix run --no-halt \
-      </dev/null > "$RUN_DIR/voice_core.log" 2>&1 & echo $! > "$RUN_DIR/voice_core.pid" )
+  ( cd "$ROOT/apps/voice_core" && (
+      MIX_ENV="${MIX_ENV:-prod}" setsid mix run --no-halt </dev/null > "$RUN_DIR/voice_core.log" 2>&1 &
+      echo $! > "$RUN_DIR/voice_core.pid"
+    ) )
   log "voice_core starting (PID $(cat "$RUN_DIR/voice_core.pid"))"
 else
   log "WARNING: mix not found; skipping voice_core"

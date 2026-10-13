@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "telephony": {
+        "type": "local",
+        "command": ["node", "apps/telephony_mcp/dist/server.js"],
+        "environment": {
+          "CONTROL_API_URL": "http://127.0.0.1:4001"
+        }
+      }
+    }
+  }
+}

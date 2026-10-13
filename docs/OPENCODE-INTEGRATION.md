@@ -56,18 +56,20 @@ ls dist/
 
 ### MCP Configuration
 
-Add the telephony MCP server to OpenCode's MCP configuration. The exact location depends on your OpenCode setup, but typically in your OpenCode config file.
+The repository ships a working [`opencode.json`](../opencode.json) at the repo
+root:
 
-Example configuration:
 ```json
 {
-  "mcpServers": {
-    "telephony": {
-      "command": "node",
-      "args": ["/home/projects/sip-ai-platform/apps/telephony_mcp/dist/server.js"],
-      "env": {
-        "CONTROL_API_BASE_URL": "http://127.0.0.1:4001",
-        "CONTROL_API_TOKEN": ""
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "telephony": {
+        "type": "local",
+        "command": ["node", "apps/telephony_mcp/dist/server.js"],
+        "environment": {
+          "CONTROL_API_URL": "http://127.0.0.1:4001"
+        }
       }
     }
   }
@@ -75,7 +77,7 @@ Example configuration:
 ```
 
 Environment variables:
-- `CONTROL_API_BASE_URL` - URL to Control API (default: http://127.0.0.1:4001)
+- `CONTROL_API_URL` - URL to Control API (default: http://127.0.0.1:4001)
 - `CONTROL_API_TOKEN` - Bearer token if auth enabled (optional)
 
 ### Provider Configuration (Optional)

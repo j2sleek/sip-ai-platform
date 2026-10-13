@@ -43,5 +43,8 @@ defmodule VoiceCore.ARI.Decoder do
      }}
   end
 
-  defp do_decode(type, _data), do: {:error, :unknown_event, type}
+  # Asterisk emits many more event types than the core acts on (ChannelVarset,
+  # ChannelDtmfReceived, ChannelHangupRequest, …). Those are ignored, not errors;
+  # returning a consistent tuple here keeps the long-lived event stream alive.
+  defp do_decode(type, _data), do: {:ignore, type}
 end

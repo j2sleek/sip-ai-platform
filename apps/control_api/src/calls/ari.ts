@@ -4,8 +4,8 @@
  * The ARI REST interface is used to originate channels into the Stasis
  * application registered by voice_core and to hang them up. Media, TTS, and the
  * agent pipeline are owned by voice_core (`AudioSocket` + the voice agent), so
- * `speak` records an agent-utterance event for the transcript and, when a media
- * template is configured, plays a sound file.
+ * `speak` queues an `agent.speak` instruction that voice_core reads and plays;
+ * voice_core reports back an `utterance.agent` once it has actually spoken.
  *
  * Every request is bounded by a timeout and errors are classified (AGENTS.md
  * rules 3, 7, 13).
@@ -16,6 +16,9 @@ import { randomUUID } from "node:crypto";
 import type { AriConfig } from "../config.js";
 import type { BackendDeps, CallBackend, OriginatedCall } from "./backend.js";
 import type { OriginateRequest } from "./types.js";
+
+/** Spoken first when an outbound call is answered and no greeting is supplied. */
+const DEFAULT_GREETING = "Hello, this is the AI assistant. How can I help you?";
 
 export class AriError extends Error {
   constructor(
@@ -167,21 +170,20 @@ export class AriBackend implements CallBackend {
       throw err;
     }
 
-    if (request.greeting) {
-      // The agent greeting is spoken by voice_core once media is up; record it
-      // for the transcript and request playback if a media template is set.
-      this.registry.append(id, "utterance.agent", { text: request.greeting });
-    }
+    // Queue the greeting as an instruction to the media body (voice_core); the
+    // body speaks it and reports back an `utterance.agent`.
+    this.registry.append(id, "agent.speak", {
+      text: request.greeting ?? DEFAULT_GREETING,
+    });
 
     return { id, meta: { channelId, endpoint } };
   }
 
   async speak(id: string, text: string): Promise<void> {
-    this.registry.append(id, "utterance.agent", { text });
-    this.log.warn(
-      { call_id: id },
-      "ARI speak: TTS playback is owned by voice_core; recorded agent utterance only",
-    );
+    // Instruction to the media body (voice_core) to synthesize and play; the
+    // body reports back an `utterance.agent` once it is actually spoken.
+    this.registry.append(id, "agent.speak", { text });
+    this.log.info({ call_id: id }, "agent.speak queued for voice_core");
   }
 
   async hangup(id: string): Promise<void> {

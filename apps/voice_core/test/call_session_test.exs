@@ -62,4 +62,64 @@ defmodule VoiceCore.CallSessionTest do
       assert CallSession.ended?(ended) == true
     end
   end
+
+  describe "child exit handling" do
+    test "a normal child exit does not end the call" do
+      call_id = "testsess-normal-#{System.unique_integer([:positive])}"
+      {:ok, pid} = CallSession.start_link(%{call_id: call_id})
+      ref = Process.monitor(pid)
+
+      media = :sys.get_state(pid).media_session
+      assert is_pid(media)
+      GenServer.stop(media, :normal)
+
+      # Session survives and forgets the dead child.
+      refute_receive {:DOWN, ^ref, :process, ^pid, _}, 200
+      assert Process.alive?(pid)
+      assert :sys.get_state(pid).media_session == nil
+
+      GenServer.stop(pid, :normal)
+    end
+
+    test "an abnormal media exit ends the session" do
+      call_id = "testsess-abnormal-#{System.unique_integer([:positive])}"
+      {:ok, pid} = CallSession.start_link(%{call_id: call_id})
+      ref = Process.monitor(pid)
+
+      media = :sys.get_state(pid).media_session
+      Process.exit(media, :boom)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1_000
+    end
+  end
+
+  describe "outbound answer timing" do
+    test "defers media setup until the channel state is Up" do
+      call_id = "testsess-outbound-#{System.unique_integer([:positive])}"
+      {:ok, pid} = CallSession.start_link(%{call_id: call_id})
+      channel = %{"id" => "chan-#{System.unique_integer([:positive])}", "state" => "Ring"}
+
+      send(
+        pid,
+        {:ari_event, %VoiceCore.ARI.Event.StasisStart{type: "StasisStart", channel: channel}}
+      )
+
+      # Synchronous round-trip guarantees the event has been handled.
+      assert :sys.get_state(pid).media_setup == false
+
+      # Answer arrives later → media is handed to AudioSocket once.
+      send(
+        pid,
+        {:ari_event,
+         %VoiceCore.ARI.Event.ChannelStateChange{
+           type: "ChannelStateChange",
+           channel: %{channel | "state" => "Up"}
+         }}
+      )
+
+      assert :sys.get_state(pid).media_setup == true
+
+      GenServer.stop(pid, :normal)
+    end
+  end
 end

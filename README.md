@@ -5,23 +5,28 @@ user can call an AI agent, and the AI agent can call the user back — with
 real-time speech-to-text, an LLM, and text-to-speech in the loop, all running on
 local/free software first.
 
-> **Status: Phase 0 ✅ · 0.5 ✅ · 1 ✅ · 2A ✅ · 2B ✅ · 3 ✅ · 4 ✅ · 5 ✅ · 6 ✅ · 7 ◑ · 9 ◑ · MCP brain ✅.**
-> The platform runs end-to-end in **simulated** mode (no Asterisk required). The
-> repository now contains:
+> **Status: Phase 0 ✅ · 0.5 ✅ · 1 ✅ · 2A ✅ · 2B ✅ · **2C ✅ live** · 3 ✅ · 4 ✅ · 5 ✅ · 6 ✅ · 7 ◑ · 9 ✅ live · MCP brain ✅.**
+> The platform runs **live end-to-end**: a real Linphone call over SIP/RTP into
+> Asterisk, bridged to the Elixir core over AudioSocket, with real STT → LLM →
+> TTS in the loop, and OpenCode able to read the live transcript and speak into
+> the call via MCP. It also runs in **simulated** mode (no Asterisk required) for
+> tests. The repository contains:
 > - Multi-runtime foundation (Elixir `voice_core`, Node `control_api` +
 >   `telephony_mcp`, Python `stt`/`llm`/`tts`/`vad`)
-> - Elixir: per-call sessions, AudioSocket media transport, turn-taking/barge-in
->   state machine, brain interface (static / HTTP-LLM)
+> - Elixir: per-call sessions, real AudioSocket media transport (host-endian
+>   wire ↔ big-endian internal), real-time paced output with silence keepalive,
+>   turn-taking/barge-in state machine, brain interface (static / HTTP-LLM)
 > - Python AI services behind swappable providers (mock by default;
->   whisper.cpp / Ollama / Piper opt-in) — standard library only
-> - Outbound call control (`POST /api/v1/calls`) with `simulated` and `ari` backends
+>   Groq / whisper.cpp / Ollama / Piper opt-in) — standard library only
+> - Outbound call control (`POST /api/v1/calls`) with `simulated` and `ari`
+>   backends
 > - **OpenCode as the brain** via the `telephony_mcp` MCP server — see
 >   [`docs/VOICE-MEETINGS.md`](docs/VOICE-MEETINGS.md)
 > - Shared contracts and repo-wide test/health scripts
 >
-> **Not yet done on this host:** live Asterisk media E2E (no Asterisk present),
-> the tool system (Phase 8), streaming STT/TTS, and observability / security /
-> load / deployment (Phases 10–13). See [`PLAN.md`](PLAN.md).
+> **Not yet done on this host:** the tool system (Phase 8), streaming STT/TTS,
+> and observability / security / load / deployment (Phases 10–13). See
+> [`PLAN.md`](PLAN.md).
 >
 > **Toolchain (verified on this host):** Erlang/OTP 27 · Elixir 1.18.3 ·
 > Node.js 26.10.0 · npm 11.19.1 · Python 3.14.4. Node apps pin TypeScript 7,
@@ -133,14 +138,14 @@ Implementation is strictly incremental (full detail in [`PLAN.md`](PLAN.md)).
 | **1** ✅ COMPLETE | Repository foundation (Elixir/Python/Node build independently, health, contracts) |
 | **2A** ✅ COMPLETE | Asterisk installation & capability discovery (22.5.2, PJSIP/ARI/AudioSocket verified) |
 | **2B** ✅ COMPLETE | PJSIP configuration (endpoints 1001/2000, dialplan, RTP 10000-10100) |
-| 2C | SIP/RTP telephony validation (Linphone testing, audio verification, hardening) |
+| **2C** ✅ COMPLETE | SIP/RTP telephony validation — real Linphone call answered, audio verified both ways |
 | **3** ✅ COMPLETE | Elixir ARI control (ARI connection + channel events; `voice_core`) |
 | **4** ✅ COMPLETE | Media transport (AudioSocket adapter behind `MediaTransport`) |
 | **5** ✅ COMPLETE | Python AI services (STT/LLM/TTS/VAD behind providers; `/health`) |
 | **6** ✅ COMPLETE | Agent runtime (voice agent body + brain interface; brain/body split) |
-| **7** ◑ PARTIAL | Barge-in (endpointing + turn state machine + barge-in implemented; TTS cancellation to wire) |
+| **7** ◑ PARTIAL | Barge-in works live (endpointing + turn state machine + barge-in cancel TTS); wire-level flush polish remains |
 | 8 | Tool system (`run_n8n_workflow`, `capture_chart`, `get_market_data`) |
-| **9** ◑ PARTIAL | Outbound calling (`POST /api/v1/calls`, `simulated` + `ari` backends, `telephony_mcp`) |
+| **9** ✅ COMPLETE | Outbound calling (`POST /api/v1/calls`, `simulated` + `ari` backends, `telephony_mcp`); live ARI originate verified |
 | **MCP brain** ✅ COMPLETE | OpenCode drives call control via `telephony_mcp` — see [`docs/VOICE-MEETINGS.md`](docs/VOICE-MEETINGS.md) |
 | 10 | Observability |
 | 11 | Security hardening |
@@ -151,13 +156,14 @@ Implementation is strictly incremental (full detail in [`PLAN.md`](PLAN.md)).
 
 **Notes on partial phases**
 
-- **Phase 7 (barge-in):** the endpointing/turn state machine and barge-in handling
-  are implemented and tested in Elixir; cancelling an in-flight TTS stream when
-  the caller barges in is wired on the next pass.
+- **Phase 7 (barge-in):** the endpointing + turn state machine and barge-in cancel
+  the in-flight TTS playback and capture the interruption as the next utterance;
+  flushing the last queued AudioSocket frame on cancel is the remaining polish.
 - **Phase 9 (outbound):** the outbound-call API, `simulated` and `ari` backends,
-  and the `telephony_mcp` MCP server are implemented and tested. Live calls
-  through Asterisk are not exercised on this host (no Asterisk installed).
-- **Phase 2C** remains open (Linphone/audio validation on the target host).
+  and the `telephony_mcp` MCP server are implemented and tested. A live ARI
+  originate to a real Linphone endpoint has been verified end-to-end.
+- **Phase 2C:** complete — a real Linphone call was answered and audio verified in
+  both directions through Asterisk → AudioSocket → `voice_core`.
 
 ## Running the environment doctor
 
@@ -243,9 +249,10 @@ Asterisk configuration lives under [`infra/asterisk/`](infra/asterisk/) (PJSIP
 endpoints 1001/2000, dialplan, ARI/AudioSocket settings). The one-install script
 `install_full.sh` installs Asterisk and renders the config via
 `infra/asterisk/configure.sh`; `start_production.sh` then brings up the whole
-stack and verifies ARI. See [`PRODUCTION.md`](PRODUCTION.md) for the full runbook
-and [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md) for verified
-capabilities.
+stack and verifies ARI. See [`PRODUCTION.md`](PRODUCTION.md) for the full runbook,
+[`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md) for verified
+capabilities, and [`docs/LIVE-CALL-VERIFICATION.md`](docs/LIVE-CALL-VERIFICATION.md)
+for the proven real-call path and AudioSocket protocol details.
 
 **Production (one install + one start):**
 

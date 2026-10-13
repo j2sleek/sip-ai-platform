@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import abc
 import array
+import io
 import json
 import math
 import os
@@ -24,6 +25,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+import wave
 
 from .errors import ProviderError
 
@@ -37,14 +39,29 @@ DEFAULT_OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
 DEFAULT_CARTESIA_TTS_URL = "https://api.cartesia.ai/v1/tts/bytes"
 
 # Default models
-DEFAULT_GROQ_TTS_MODEL = "openai/tts-1"
+DEFAULT_GROQ_TTS_MODEL = "canopylabs/orpheus-v1-english"
 DEFAULT_OPENROUTER_TTS_MODEL = "openai/tts-1"
 DEFAULT_CARTESIA_TTS_MODEL = "sonic-2"
 
 # Default voices
-DEFAULT_GROQ_TTS_VOICE = "alloy"
+DEFAULT_GROQ_TTS_VOICE = "autumn"
 DEFAULT_OPENROUTER_TTS_VOICE = "alloy"
 DEFAULT_CARTESIA_TTS_VOICE = "aura-2-santiago"
+
+# Groq Orpheus only returns WAV and caps input at 200 characters per request.
+GROQ_TTS_MAX_INPUT_CHARS = 200
+GROQ_TTS_RESPONSE_FORMAT = "wav"
+
+# Cloudflare (fronting Groq/OpenRouter) rejects the default python-urllib
+# User-Agent with HTTP 403 / error 1010, so every request carries an explicit UA.
+DEFAULT_USER_AGENT = "sip-ai-platform/0.2.0"
+
+
+def _urlopen(request: urllib.request.Request, timeout: float):
+    """urlopen with a stable User-Agent header."""
+    if not request.has_header("User-agent"):
+        request.add_header("User-Agent", DEFAULT_USER_AGENT)
+    return urllib.request.urlopen(request, timeout=timeout)
 
 
 def pcm_s16be(samples: "array.array | list[int]") -> bytes:
@@ -64,6 +81,90 @@ def pcm_le_to_be(data: bytes) -> bytes:
     if sys.byteorder == "little":
         buf.byteswap()
     return buf.tobytes()
+
+
+def decode_wav_mono(data: bytes) -> tuple[array.array, int]:
+    """Decodes a 16-bit WAV payload into mono samples and its sample rate.
+
+    Returns ``(samples, sample_rate)`` where ``samples`` is an ``array('h')`` in
+    native byte order. Only 16-bit PCM is accepted; multi-channel audio is
+    down-mixed to mono. Raises ``ProviderError`` for unsupported payloads.
+    """
+    try:
+        with wave.open(io.BytesIO(data), "rb") as wav:
+            channels = wav.getnchannels()
+            width = wav.getsampwidth()
+            rate = wav.getframerate()
+            frames = wav.readframes(wav.getnframes())
+    except (wave.Error, EOFError) as exc:
+        raise ProviderError("tts returned an unreadable WAV payload", code="provider_bad_payload") from exc
+
+    if width != 2:
+        raise ProviderError(
+            f"unsupported WAV sample width: {width * 8}-bit", code="provider_bad_payload"
+        )
+
+    samples = array.array("h")
+    samples.frombytes(frames)
+    if sys.byteorder == "big":
+        samples.byteswap()
+
+    if channels > 1:
+        mono = array.array("h", [0] * (len(samples) // channels))
+        for i in range(len(mono)):
+            total = 0
+            for c in range(channels):
+                total += samples[i * channels + c]
+            mono[i] = total // channels
+        samples = mono
+
+    return samples, rate
+
+
+def resample_pcm(samples: array.array, src_rate: int, dst_rate: int) -> array.array:
+    """Linear-interpolates 16-bit PCM from ``src_rate`` to ``dst_rate``."""
+    if src_rate == dst_rate or not len(samples):
+        return samples
+    ratio = src_rate / dst_rate
+    count = int(len(samples) / ratio)
+    out = array.array("h", [0] * count)
+    for i in range(count):
+        pos = i * ratio
+        idx = int(pos)
+        frac = pos - idx
+        a = samples[idx]
+        b = samples[idx + 1] if idx + 1 < len(samples) else a
+        out[i] = int(a + (b - a) * frac)
+    return out
+
+
+def chunk_text(text: str, limit: int) -> list[str]:
+    """Splits ``text`` into pieces no longer than ``limit`` characters."""
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for word in text.split():
+        while len(word) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(word[:limit])
+            word = word[limit:]
+        candidate = f"{current} {word}".strip()
+        if len(candidate) <= limit:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            current = word
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 class TTSProvider(abc.ABC):
@@ -182,7 +283,7 @@ class GroqTTSProvider(TTSProvider):
         timeout_s: float = 15.0,
         url: str = DEFAULT_GROQ_TTS_URL,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
-        response_format: str = "pcm",
+        response_format: str = GROQ_TTS_RESPONSE_FORMAT,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -196,6 +297,17 @@ class GroqTTSProvider(TTSProvider):
         if not text:
             return b""
 
+        samples: array.array = array.array("h")
+        for chunk in chunk_text(text, GROQ_TTS_MAX_INPUT_CHARS):
+            audio = self._speak(chunk)
+            chunk_samples, src_rate = decode_wav_mono(audio)
+            samples.extend(resample_pcm(chunk_samples, src_rate, self.sample_rate))
+
+        if not samples:
+            raise ProviderError("groq returned empty audio", code="provider_bad_payload")
+        return pcm_s16be(samples)
+
+    def _speak(self, text: str) -> bytes:
         payload = json.dumps(
             {
                 "model": self._model,
@@ -216,7 +328,7 @@ class GroqTTSProvider(TTSProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+            with _urlopen(request, self._timeout) as resp:
                 audio = resp.read()
         except urllib.error.HTTPError as exc:
             raise ProviderError(
@@ -227,9 +339,7 @@ class GroqTTSProvider(TTSProvider):
 
         if not audio:
             raise ProviderError("groq returned empty audio", code="provider_bad_payload")
-
-        # Groq may return PCM in little-endian or as requested; normalize to big-endian
-        return pcm_le_to_be(audio)
+        return audio
 
 
 class OpenRouterTTSProvider(TTSProvider):
@@ -281,7 +391,7 @@ class OpenRouterTTSProvider(TTSProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+            with _urlopen(request, self._timeout) as resp:
                 audio = resp.read()
         except urllib.error.HTTPError as exc:
             raise ProviderError(
@@ -347,7 +457,7 @@ class CartesiaTTSProvider(TTSProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+            with _urlopen(request, self._timeout) as resp:
                 audio = resp.read()
         except urllib.error.HTTPError as exc:
             raise ProviderError(

@@ -27,10 +27,13 @@ defmodule VoiceCore.CallSession do
     :state,
     :media_session,
     :voice_agent,
+    :control_bus,
+    :greeting,
     :start_time,
     :channel_id,
     :channel_state,
-    :last_event_time
+    :last_event_time,
+    :media_setup
   ]
 
   @type t :: %__MODULE__{}
@@ -44,6 +47,7 @@ defmodule VoiceCore.CallSession do
       caller_id: caller_id,
       destination: destination,
       state: :new,
+      media_setup: false,
       start_time: System.system_time(:millisecond),
       last_event_time: System.system_time(:millisecond)
     }
@@ -101,6 +105,10 @@ defmodule VoiceCore.CallSession do
 
   @impl true
   def init(args) do
+    # Trap exits so a supervisor shutdown runs terminate/2 (deterministic cleanup
+    # of media/agent/bridge children) instead of leaking linked processes.
+    Process.flag(:trap_exit, true)
+
     call_id = Map.fetch!(args, :call_id)
 
     # Media + agent children belong to *this* session; when the session stops
@@ -115,7 +123,7 @@ defmodule VoiceCore.CallSession do
       VoiceCore.VoiceAgent.start_link(%{
         call_id: call_id,
         media_session: media_pid,
-        brain: Map.get(args, :brain, VoiceCore.Brain.Static),
+        brain: Map.get(args, :brain, configured_brain()),
         ai: Map.get(args, :ai, VoiceCore.AI)
       })
 
@@ -127,8 +135,27 @@ defmodule VoiceCore.CallSession do
         Map.get(args, :destination, "")
       )
 
+    # If the channel id is known up front (dispatcher path), publish the mapping
+    # now so ARI events can be routed without a race against StasisStart.
+    state =
+      case Map.get(args, :channel_id) do
+        channel_id when is_binary(channel_id) ->
+          VoiceCore.CallRegistry.register_channel(channel_id, self())
+          %{state | channel_id: channel_id}
+
+        _ ->
+          state
+      end
+
     Logger.info("CallSession started for call #{call_id}", call_id: call_id)
-    {:ok, %{state | media_session: media_pid, voice_agent: agent_pid}}
+
+    {:ok,
+     %{
+       state
+       | media_session: media_pid,
+         voice_agent: agent_pid,
+         greeting: Map.get(args, :greeting, configured_greeting())
+     }}
   end
 
   @impl true
@@ -164,6 +191,47 @@ defmodule VoiceCore.CallSession do
     {:noreply, state}
   end
 
+  # Child processes are linked (we trap exits). A *normal* exit is expected for
+  # some children — e.g. the ControlBus greets locally and stops for inbound
+  # calls control_api doesn't know — and must not end the call. An *abnormal*
+  # exit of media/agent/bridge is fatal, so the session stops and is cleaned up.
+  def handle_info({:EXIT, pid, reason}, state) do
+    cond do
+      pid not in [state.voice_agent, state.media_session, state.control_bus] ->
+        {:noreply, state}
+
+      reason == :normal ->
+        {:noreply, clear_child(state, pid)}
+
+      true ->
+        Logger.warning("CallSession #{state.call_id}: child exited (#{inspect(reason)})",
+          call_id: state.call_id
+        )
+
+        {:stop, :normal, %{state | state: :ended}}
+    end
+  end
+
+  # The transport bound this call's media connection: mark the call active, tell
+  # control_api it was answered, and start the brain bridge (or greet locally
+  # when the bridge is disabled).
+  def handle_info({:media_ready, conn_id}, state) do
+    Logger.info("CallSession #{state.call_id}: media ready (#{conn_id})", call_id: state.call_id)
+    VoiceCore.ControlApi.report(state.call_id, "call.answered", %{conn_id: conn_id})
+
+    {:noreply, %{state | state: :media_active, channel_state: "media_active"} |> start_control()}
+  end
+
+  # The transport went away (the caller hung up or the channel was hung up):
+  # the call is over. cleanup/reporting happens in terminate/2.
+  def handle_info(:media_disconnected, state) do
+    Logger.info("CallSession #{state.call_id}: media disconnected — ending call",
+      call_id: state.call_id
+    )
+
+    {:stop, :normal, %{state | state: :ended}}
+  end
+
   def handle_info({:dtmf, digit}, state) do
     if is_pid(state.voice_agent), do: send(state.voice_agent, {:dtmf, digit})
     {:noreply, state}
@@ -180,28 +248,40 @@ defmodule VoiceCore.CallSession do
 
   defp handle_ari_event(%VoiceCore.ARI.Event.StasisStart{channel: channel} = _event, state) do
     channel_id = channel["id"]
-    Logger.info("ARI StasisStart: #{channel_id}", call_id: state.call_id)
+
+    Logger.info("CallSession #{state.call_id}: StasisStart channel #{channel_id}",
+      call_id: state.call_id
+    )
+
+    # Publish the channel id so subsequent ARI events route here.
     VoiceCore.CallRegistry.register_channel(channel_id, self())
 
-    {:noreply,
-     %{
-       state
-       | channel_id: channel_id,
-         channel_state: "StasisStart",
-         state: :connected,
-         last_event_time: System.system_time(:millisecond)
-     }}
+    state = %{
+      state
+      | channel_id: channel_id,
+        channel_state: channel["state"] || "StasisStart",
+        state: :connected,
+        last_event_time: System.system_time(:millisecond)
+    }
+
+    # Outbound (ARI-originated) calls enter Stasis while still ringing; only hand
+    # the channel to AudioSocket once answered, else the AudioSocket app aborts
+    # with "Channel is not answered". Inbound calls arrive already Up.
+    state = maybe_setup_media(channel, state)
+
+    {:noreply, state}
   end
 
   defp handle_ari_event(%VoiceCore.ARI.Event.ChannelStateChange{channel: channel} = _event, state) do
     Logger.debug("ARI ChannelStateChange: #{channel["id"]}", call_id: state.call_id)
 
-    {:noreply,
-     %{
-       state
-       | channel_state: channel["state"],
-         last_event_time: System.system_time(:millisecond)
-     }}
+    state = %{
+      state
+      | channel_state: channel["state"],
+        last_event_time: System.system_time(:millisecond)
+    }
+
+    {:noreply, maybe_setup_media(channel, state)}
   end
 
   defp handle_ari_event(%VoiceCore.ARI.Event.ChannelDestroyed{} = _event, state) do
@@ -221,17 +301,109 @@ defmodule VoiceCore.CallSession do
 
   @impl true
   def terminate(_reason, state) do
-    # Children are linked; this log + registry cleanup is the deterministic
-    # cleanup path.
+    # Best-effort: tell control_api the call is over (idempotent on their side).
+    VoiceCore.ControlApi.report(state.call_id, "call.ended", %{})
+
     if state.channel_id do
       VoiceCore.CallRegistry.unregister_channel(state.channel_id)
     end
+
+    # Children are linked, but a normal stop does not signal linked processes, so
+    # stop them explicitly — no orphaned media/agent/bridge processes.
+    Enum.each([state.control_bus, state.voice_agent, state.media_session], fn pid ->
+      if is_pid(pid) and Process.alive?(pid), do: Process.exit(pid, :shutdown)
+    end)
 
     Logger.info("CallSession #{state.call_id}: terminating (#{state.state})",
       call_id: state.call_id
     )
 
     :ok
+  end
+
+  # ─── helpers ────────────────────────────────────────────────────────────────
+
+  # Hand the channel to the [ai] AudioSocket dialplan exactly once, and only
+  # after it is answered (`Up`). ARI-originated calls enter Stasis while still
+  # ringing; running AudioSocket then aborts with "Channel is not answered".
+  defp maybe_setup_media(_channel, %{media_setup: true} = state), do: state
+
+  defp maybe_setup_media(%{"state" => "Up"} = channel, state) do
+    setup_media(channel["id"] || state.channel_id, state.call_id)
+    %{state | media_setup: true}
+  end
+
+  defp maybe_setup_media(_channel, state), do: state
+
+  # Answer the channel and hand it to the [ai] dialplan context, which runs
+  # `AudioSocket(${AI_UUID}, ...)`. The AudioSocket server then binds the media
+  # connection back to this call's MediaSession via the call id. Skipped entirely
+  # when ARI is disabled (tests/offline), so no network I/O happens.
+  defp setup_media(channel_id, call_id) do
+    if ari_enabled?() do
+      spawn(fn -> ari_setup_media(channel_id, call_id) end)
+    end
+
+    :ok
+  end
+
+  defp ari_setup_media(channel_id, call_id) do
+    with :ok <- VoiceCore.ARI.Client.set_variable(channel_id, "AI_UUID", call_id),
+         :ok <- VoiceCore.ARI.Client.answer(channel_id),
+         :ok <- VoiceCore.ARI.Client.continue(channel_id, "ai", "s", 1) do
+      Logger.info("CallSession #{call_id}: channel handed to [ai] AudioSocket",
+        call_id: call_id
+      )
+    else
+      {:error, reason} ->
+        Logger.error("CallSession #{call_id}: ARI media setup failed: #{inspect(reason)}",
+          call_id: call_id
+        )
+    end
+  end
+
+  defp ari_enabled? do
+    Application.get_env(:voice_core, :ari, [])[:enabled] == true
+  end
+
+  # Start the brain bridge when control_api is enabled; otherwise greet locally.
+  def start_control(state) do
+    if VoiceCore.ControlApi.enabled?() do
+      {:ok, pid} =
+        VoiceCore.ControlBus.start_link(%{
+          call_id: state.call_id,
+          agent: state.voice_agent,
+          greeting: state.greeting
+        })
+
+      %{state | control_bus: pid}
+    else
+      if is_pid(state.voice_agent) and is_binary(state.greeting) and state.greeting != "" do
+        send(state.voice_agent, {:speak, state.greeting})
+      end
+
+      state
+    end
+  end
+
+  defp configured_brain do
+    Application.get_env(:voice_core, :brain, VoiceCore.Brain.Static)
+  end
+
+  # Drop a reference to a child that exited normally so cleanup and later lookups
+  # never target a dead pid.
+  defp clear_child(state, pid) do
+    cond do
+      pid == state.control_bus -> %{state | control_bus: nil}
+      pid == state.voice_agent -> %{state | voice_agent: nil}
+      pid == state.media_session -> %{state | media_session: nil}
+      true -> state
+    end
+  end
+
+  defp configured_greeting do
+    Application.get_env(:voice_core, :agent, [])[:greeting] ||
+      "Hello, this is the AI assistant. How can I help you?"
   end
 
   defp status_map(state) do

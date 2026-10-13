@@ -28,6 +28,20 @@ from .errors import ProviderError
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Free, currently-hosted Groq models. gpt-oss-20b is the low-latency default for
+# voice; override with LLM_MODEL (e.g. openai/gpt-oss-120b for higher quality).
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
+
+# Cloudflare (fronting Groq/OpenRouter) rejects the default python-urllib
+# User-Agent with HTTP 403 / error 1010, so every request carries an explicit UA.
+DEFAULT_USER_AGENT = "sip-ai-platform/0.2.0"
+
+
+def _urlopen(request: urllib.request.Request, timeout: float):
+    """urlopen with a stable User-Agent header."""
+    if not request.has_header("User-agent"):
+        request.add_header("User-Agent", DEFAULT_USER_AGENT)
+    return urllib.request.urlopen(request, timeout=timeout)
 DEFAULT_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
@@ -108,7 +122,7 @@ class OllamaLLMProvider(LLMProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+            with _urlopen(request, self._timeout) as resp:
                 body = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             raise ProviderError(
@@ -156,7 +170,7 @@ class OpenRouterLLMProvider(LLMProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+            with _urlopen(request, self._timeout) as resp:
                 body = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             raise ProviderError(
@@ -183,16 +197,33 @@ class GroqLLMProvider(LLMProvider):
     """Groq API (OpenAI-compatible) - very fast, good free tier."""
     name = "groq"
 
-    def __init__(self, api_key: str, model: str, timeout_s: float = 30.0, url: str = DEFAULT_GROQ_URL):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = DEFAULT_GROQ_MODEL,
+        timeout_s: float = 30.0,
+        url: str = DEFAULT_GROQ_URL,
+        max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
+    ):
         self._url = url
         self.model = model
         self._api_key = api_key
         self._timeout = timeout_s
+        self._max_tokens = max_tokens
+        self._reasoning_effort = reasoning_effort
 
     def generate(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
-        payload = json.dumps(
-            {"model": self.model, "messages": messages, "stream": False}
-        ).encode("utf-8")
+        body: dict[str, Any] = {"model": self.model, "messages": messages, "stream": False}
+        # gpt-oss and other reasoning models spend completion budget on internal
+        # reasoning tokens; without an explicit cap the visible content can be
+        # truncated to an empty string.
+        if self._max_tokens:
+            payload_max_tokens = self._max_tokens
+            body["max_tokens"] = payload_max_tokens
+        if self._reasoning_effort:
+            body["reasoning_effort"] = self._reasoning_effort
+        payload = json.dumps(body).encode("utf-8")
         request = urllib.request.Request(
             self._url,
             data=payload,
@@ -204,7 +235,7 @@ class GroqLLMProvider(LLMProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+            with _urlopen(request, self._timeout) as resp:
                 body = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             raise ProviderError(
@@ -253,7 +284,7 @@ class GoogleGeminiLLMProvider(LLMProvider):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+            with _urlopen(request, self._timeout) as resp:
                 body = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             raise ProviderError(
@@ -299,9 +330,14 @@ def get_provider(name: str | None = None) -> LLMProvider:
         api_key = os.environ.get("GROQ_API_KEY", "").strip()
         if not api_key:
             raise ProviderError("GROQ_API_KEY required for groq provider")
-        model = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
+        model = os.environ.get("LLM_MODEL", DEFAULT_GROQ_MODEL)
         timeout = float(os.environ.get("LLM_REQUEST_TIMEOUT_S", "30"))
-        return GroqLLMProvider(api_key, model, timeout_s=timeout)
+        max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "1024"))
+        reasoning_effort = os.environ.get("LLM_REASONING_EFFORT", "").strip() or None
+        return GroqLLMProvider(
+            api_key, model, timeout_s=timeout, max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+        )
     if name in ("gemini", "google", "googleai"):
         api_key = os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
         if not api_key:

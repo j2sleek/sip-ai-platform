@@ -61,4 +61,30 @@ config :voice_core, :agent,
   # RMS above this → speech; below → silence (energy VAD on 16-bit PCM)
   vad_threshold: 300.0,
   # Consecutive silence frames (100ms each) before an utterance is endpointed
-  silence_frames_to_endpoint: 6
+  silence_frames_to_endpoint: 6,
+  # Spoken when a call attaches without a brain-supplied greeting (inbound calls).
+  greeting:
+    System.get_env("AGENT_GREETING", "Hello, this is the AI assistant. How can I help you?")
+
+# ─── Brain selection ────────────────────────────────────────────────────────
+# "llm"      → VoiceCore.Brain.HTTPLLM (calls the platform `llm` service; default
+#              for production, drives fast turn-taking on its own)
+# "static"   → VoiceCore.Brain.Static  (canned replies; tests/offline default)
+brain =
+  case System.get_env("VOICE_BRAIN", "static") do
+    "llm" -> VoiceCore.Brain.HTTPLLM
+    "http_llm" -> VoiceCore.Brain.HTTPLLM
+    _ -> VoiceCore.Brain.Static
+  end
+
+config :voice_core, :brain, brain
+
+# ─── control_api bridge (brain ↔ body message bus) ──────────────────────────
+# When enabled, the body reports caller/agent turns to control_api and reads
+# `agent.speak` instructions from it (how OpenCode/MCP drives a live call).
+config :voice_core, :control_api,
+  enabled: System.get_env("CONTROL_API_ENABLED", "false") == "true",
+  base_url: System.get_env("CONTROL_API_URL", "http://127.0.0.1:4001"),
+  token: System.get_env("CONTROL_API_TOKEN", ""),
+  request_timeout_ms: int_env.("CONTROL_API_TIMEOUT_MS", 5_000),
+  poll_wait_ms: int_env.("CONTROL_API_POLL_WAIT_MS", 1_000)
