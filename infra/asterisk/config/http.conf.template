@@ -1,0 +1,9 @@
+;
+; SIP AI Platform — Asterisk HTTP server (required by ARI / res_http_websocket).
+; Rendered by `infra/asterisk/configure.sh` from this template.
+;
+
+[general]
+enabled = yes
+bindaddr = @HTTP_BINDADDR@
+bindport = @HTTP_BINDPORT@

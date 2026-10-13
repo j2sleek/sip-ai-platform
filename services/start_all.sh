@@ -12,7 +12,8 @@ done
 
 echo "Starting control_api..."
 cd "$ROOT/apps/control_api"
-CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALLS_BACKEND=simulated node dist/server.js > "$ROOT/control_api.log" 2>&1 &
+# Call backend: ari (Asterisk) | simulated (no telephony). Set CALL_BACKEND to override.
+HOST="${HOST:-127.0.0.1}" PORT="${PORT:-4001}" CALL_BACKEND="${CALL_BACKEND:-simulated}" node dist/server.js > "$ROOT/control_api.log" 2>&1 &
 echo $! > "$ROOT/control_api.pid"
 
 sleep 2

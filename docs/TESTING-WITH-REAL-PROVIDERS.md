@@ -114,7 +114,7 @@ PYTHONPATH=src python3 -m vad.server
 
 ### Terminal 5: Control API (port 4001)
 ```bash
-CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALLS_BACKEND=simulated node apps/control_api/dist/server.js
+CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALL_BACKEND=simulated node apps/control_api/dist/server.js
 ```
 
 All services start in mock by default. With env vars set, they use real providers.
@@ -153,12 +153,13 @@ curl -X POST http://127.0.0.1:5001/v1/transcribe \
   -d '{"audio":"dGVzdA=="}'
 ```
 
-## Step 5: Test via Control API (Simulated)
+## Step 5: Test via Control API (real ARI call)
 
-With `CALLS_BACKEND=simulated` (default), you can test full flow without Asterisk/SIP.
+With `CALL_BACKEND=ari` the Control API drives Asterisk. `to` may be a bare
+extension (`2000`) or a full endpoint (`Local/2000@internal`, `PJSIP/1001`).
 
 ```bash
-curl -X POST http://127.0.0.1:4001/v1/calls \
+curl -X POST http://127.0.0.1:4001/api/v1/calls \
   -H "Content-Type: application/json" \
   -d '{"to":"+15551234567","from":"+15550000000","context":{"purpose":"test"}}'
 ```
@@ -166,13 +167,13 @@ curl -X POST http://127.0.0.1:4001/v1/calls \
 Response includes call_id. Check events:
 
 ```bash
-curl "http://127.0.0.1:4001/v1/calls/{CALL_ID}/events?since=0"
+curl "http://127.0.0.1:4001/api/v1/calls/{CALL_ID}/events?since=0&wait=1000"
 ```
 
 Speak to call:
 
 ```bash
-curl -X POST http://127.0.0.1:4001/v1/calls/{CALL_ID}/speak \
+curl -X POST http://127.0.0.1:4001/api/v1/calls/{CALL_ID}/speak \
   -H "Content-Type: application/json" \
   -d '{"text":"Hello, how can I help?"}'
 ```
@@ -180,7 +181,7 @@ curl -X POST http://127.0.0.1:4001/v1/calls/{CALL_ID}/speak \
 Hangup:
 
 ```bash
-curl -X DELETE http://127.0.0.1:4001/v1/calls/{CALL_ID}
+curl -X POST http://127.0.0.1:4001/api/v1/calls/{CALL_ID}/hangup
 ```
 
 ## Step 6: Test via Telephony MCP (Brain Integration)
@@ -226,7 +227,7 @@ For actual SIP calls (requires Asterisk/ARI setup):
 2. Configure SIP account pointing to your Asterisk server
 3. Start Control API with ARI backend:
 ```bash
-CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALLS_BACKEND=ari \
+CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALL_BACKEND=ari \
 ARI_BASE_URL=http://your-asterisk:8088 \
 ARI_USERNAME=voice_core ARI_PASSWORD=your-pass ARI_APP=voice_core \
 node apps/control_api/dist/server.js

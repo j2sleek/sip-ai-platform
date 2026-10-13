@@ -22,7 +22,7 @@ The configured test account in Asterisk is **Extension 1001**:
 |---|---|
 | Extension/Username | `1001` |
 | Password | `1001_secure_password_here` |
-| Domain/Server | Your Asterisk server IP (e.g., `10.171.202.39` as configured, or `127.0.0.1` if local) |
+| Domain/Server | The host's IP address — run `hostname -I` (e.g. `10.214.100.129`), or `127.0.0.1` for a local softphone |
 | Transport | UDP (port 5060) |
 | Context | `internal` |
 | Allowed codecs | ulaw, alaw |
@@ -69,7 +69,7 @@ cd apps/control_api && npm start &
 
 2. Use simulated backend (no Asterisk needed):
 ```bash
-export CALLS_BACKEND=simulated
+export CALL_BACKEND=simulated
 ```
 
 3. Test with demo:
@@ -77,8 +77,31 @@ export CALLS_BACKEND=simulated
 node apps/telephony_mcp/scripts/demo-voice-loop.mjs
 ```
 
+## Start the platform
+
+Asterisk is installed and configured by the one-install wrapper:
+
+```bash
+./install_full.sh          # venvs, builds, Asterisk install + PJSIP/ARI config
+./start_production.sh      # Asterisk + voice_core + control_api + AI services
+```
+
+The stack then drives real calls through `CALL_BACKEND=ari`. To exercise the AI
+pipeline without any telephony, start with `CALL_BACKEND=simulated` instead.
+
+### Smoke test without a phone
+
+```bash
+# Originate a real call into the dialplan (Local channel), then hang up
+curl -X POST http://127.0.0.1:4001/api/v1/calls \
+  -H 'Content-Type: application/json' \
+  -d '{"to":"Local/2000@internal","from":"agent"}'
+```
+
 ## Notes
-- Default mode is `simulated` - no real SIP needed for testing the AI pipeline
-- For live SIP calls, configure Asterisk/ARI and set `CALLS_BACKEND=ari`
-- Linphone config depends on your SIP server setup; not needed for simulated testing
-- All cloud providers are optional; mock gives deterministic behavior
+- Production backend is `ari` (Asterisk). `simulated` is available for offline
+  AI-pipeline testing (and is what the automated tests use).
+- The `1001` password in `infra/asterisk/config/pjsip.conf` is a development
+  placeholder — change it before exposing the host.
+- Cloud AI providers are optional; the `mock` providers give deterministic
+  behavior for local testing.

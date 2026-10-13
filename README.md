@@ -240,12 +240,20 @@ asterisk -rx 'pjsip show endpoints'
 ```
 
 Asterisk configuration lives under [`infra/asterisk/`](infra/asterisk/) (PJSIP
-endpoints 1001/2000, dialplan, ARI/AudioSocket settings) with start/stop/status
-scripts. **Asterisk is not installed on the current development host**, so live
-calls are not exercised here; the configuration is applied on the target host.
-See [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md) for verified
-capabilities and [`infra/asterisk/README.md`](infra/asterisk/README.md) for
-runtime management.
+endpoints 1001/2000, dialplan, ARI/AudioSocket settings). The one-install script
+`install_full.sh` installs Asterisk and renders the config via
+`infra/asterisk/configure.sh`; `start_production.sh` then brings up the whole
+stack and verifies ARI. See [`PRODUCTION.md`](PRODUCTION.md) for the full runbook
+and [`docs/ASTERISK-CAPABILITIES.md`](docs/ASTERISK-CAPABILITIES.md) for verified
+capabilities.
+
+**Production (one install + one start):**
+
+```sh
+./install_full.sh        # venvs, Node/Elixir builds, Asterisk install + config
+export GROQ_API_KEY=gsk_...
+./start_production.sh    # Asterisk + voice_core + control_api + AI services
+```
 
 **Repo-wide:**
 

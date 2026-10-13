@@ -32,9 +32,9 @@ end
 config :voice_core, :ari,
   enabled: System.get_env("ARI_ENABLED", "false") == "true",
   url: System.get_env("ARI_BASE_URL", "http://127.0.0.1:8088"),
-  user: System.get_env("ARI_USERNAME", "sip_ai_platform"),
+  user: System.get_env("ARI_USERNAME", "voice_core"),
   pass: System.get_env("ARI_PASSWORD", ""),
-  app: System.get_env("ARI_APP_NAME", "sip_ai_platform")
+  app: System.get_env("ARI_APP_NAME", "voice_core")
 
 # ─── AI provider endpoints (utterance-granularity HTTP calls) ───────────────
 int_env = fn name, default ->

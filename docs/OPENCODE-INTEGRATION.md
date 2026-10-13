@@ -27,7 +27,7 @@ cd services/vad && PYTHONPATH=src python3 -m vad.server &
 
 Start Control API (simulated mode by default):
 ```bash
-CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALLS_BACKEND=simulated node apps/control_api/dist/server.js &
+CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALL_BACKEND=simulated node apps/control_api/dist/server.js &
 ```
 
 Verify all are healthy:
@@ -157,7 +157,7 @@ For real SIP calls, you need Asterisk configured and Linphone as the softphone.
 
 Set Control API to use ARI backend:
 ```bash
-export CALLS_BACKEND=ari
+export CALL_BACKEND=ari
 export ARI_BASE_URL=http://your-asterisk:8088
 export ARI_USERNAME=voice_core
 export ARI_PASSWORD=your-password
@@ -166,7 +166,7 @@ export ARI_APP=voice_core
 
 Start Control API with ARI config:
 ```bash
-CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALLS_BACKEND=ari ARI_BASE_URL=http://asterisk:8088 ARI_USERNAME=voice_core ARI_PASSWORD=pass ARI_APP=voice_core node apps/control_api/dist/server.js &
+CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALL_BACKEND=ari ARI_BASE_URL=http://asterisk:8088 ARI_USERNAME=voice_core ARI_PASSWORD=pass ARI_APP=voice_core node apps/control_api/dist/server.js &
 ```
 
 4. **Test Call Flow**:
@@ -178,8 +178,8 @@ CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALLS_BACKEND=ari ARI_BASE_URL=ht
 
 | Mode | Backend | Use Case |
 |---|---|---|
-| **Simulated** (`CALLS_BACKEND=simulated`) | Default | Development, testing AI pipeline, no SIP infrastructure needed. Perfect for validating OpenCode integration. |
-| **Real SIP** (`CALLS_BACKEND=ari`) | Asterisk ARI | Production-like testing with actual voice calls via Linphone/SIP phones. |
+| **Simulated** (`CALL_BACKEND=simulated`) | In-memory | Development, testing the AI pipeline with no SIP infrastructure. |
+| **Real SIP** (`CALL_BACKEND=ari`, default) | Asterisk ARI | Production: actual voice calls via Linphone/SIP phones. |
 
 ## Step 6: End-to-End Verification
 

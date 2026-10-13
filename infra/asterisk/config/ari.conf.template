@@ -1,0 +1,17 @@
+;
+; SIP AI Platform — Asterisk ARI users.
+;
+; This is a TEMPLATE. Do not edit /etc/asterisk/ari.conf by hand: run
+; `infra/asterisk/configure.sh`, which renders this file and injects the ARI
+; username and password (the password is never committed).
+;
+
+[general]
+enabled = yes
+pretty = no
+
+[@ARI_USER@]
+type = user
+read_only = no
+password = @ARI_PASSWORD@
+password_format = plain

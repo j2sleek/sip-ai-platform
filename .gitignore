@@ -40,6 +40,10 @@ env/
 .ruff_cache/
 *.egg-info/
 
+# ─── Local runtime state / generated local secrets (never commit) ───────────────
+/run/
+infra/asterisk/.ari_password
+
 # ─── AI models (never commit large model weights) ──────────────────────────────
 *.gguf
 *.bin

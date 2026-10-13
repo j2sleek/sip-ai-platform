@@ -18,7 +18,8 @@ for s in stt llm tts vad; do cd services/$s && ./run.sh & done
 
 ### Node Services
 ```bash
-CONTROL_API_PORT=4001 PORT=4001 HOST=127.0.0.1 CALLS_BACKEND=simulated node apps/control_api/dist/server.js
+# HOST/PORT are the canonical listener variables; CALL_BACKEND=simulated|ari
+HOST=127.0.0.1 PORT=4001 CALL_BACKEND=simulated node apps/control_api/dist/server.js
 ```
 
 ### All at once
