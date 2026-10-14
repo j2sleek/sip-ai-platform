@@ -35,9 +35,16 @@ Selected with `CALL_BACKEND`:
 | `POST /api/v1/calls/:id/speak` | `{ text }` | `202 { call }` |
 | `POST /api/v1/calls/:id/hangup` | — | `200 { call }` |
 | `GET /api/v1/calls/:id/events` | `?since=<seq>&wait=<ms>` | `{ events, call, cursor }` |
+| `POST /api/v1/calls/:id/events` | `{ type, data }` (voice_core ingest) | `202 { event }` |
 
 `GET .../events` long-polls: it returns immediately if events after `since`
 already exist, otherwise waits up to `wait` ms (capped by `MAX_EVENT_WAIT_MS`).
+
+`POST .../events` is how the media body (`voice_core`) reports progress. If the
+`id` is unknown, the call is registered as **inbound** (`direction: "inbound"`)
+with the body's `channel_id` — a dial-in that entered the Stasis app — so the
+brain bridge attaches and OpenCode/MCP can drive it like an originated call
+(ADR-0018). Unknown event *types* are rejected with `400` and register nothing.
 
 Event types: `call.created`, `call.ringing`, `call.answered`, `call.ended`,
 `call.failed`, `utterance.user`, `utterance.agent`, `dtmf`

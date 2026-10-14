@@ -19,25 +19,37 @@ There are two ways a call gets answered, and they must not both run at once
 
 | `VOICE_BRAIN` | Who decides what to say | Use for |
 |---|---|---|
-| `auto` (default) | direction: OpenCode for OpenCode-originated calls, the local `llm` service for inbound calls | mixed / everyday |
-| `llm` | the body's local `llm` service | fast, unattended calls |
+| `auto` (default) | direction: OpenCode for **both** OpenCode-originated and inbound calls, the local `llm` service only as a fallback | mixed / everyday |
+| `llm` | the body's local `llm` service | fast, fully unattended calls |
 | `external` | **OpenCode**, via `speak` over MCP | OpenCode-driven conversations only |
 | `static` | canned replies | offline tests/demos |
 
-**`auto` (ADR-0017)** is usually what you want: a call you *dial in* is answered
-by the fast local `llm` service, while a call **OpenCode originates** defers to
-OpenCode (the body only transcribes + reports). Direction is resolved by
-`voice_core.ControlBus`, which already knows whether `control_api` owns the call.
-On a bridged call the body also speaks a short local filler ("Let me check on
-that.") if OpenCode has not replied within `AGENT_FILLER_DELAY_MS` (default
-900 ms), so the caller hears acknowledgment while OpenCode thinks.
+**`auto` (ADR-0017/0018)** is usually what you want: any call with a bridge
+defers to OpenCode (the body only transcribes + reports), and only calls with no
+bridge fall back to the local `llm` service. Direction is resolved by
+`voice_core.ControlBus`, which knows whether `control_api` owns the call. Since
+ADR-0018, **inbound calls are registered with `control_api` too** (on the body's
+first `call.answered` report), so a dial-in gets a bridge and is answered by
+OpenCode just like an originated call — the stateless local model no longer
+answers inbound calls (it used to hallucinate project answers). Because no
+backend queues a greeting for an inbound call, the body speaks the configured
+local greeting **once** on an inbound call, then defers. On a bridged call the
+body also speaks a short local filler ("Let me check on that.") if OpenCode has
+not replied within `AGENT_FILLER_DELAY_MS` (default 900 ms), so the caller hears
+acknowledgment while OpenCode thinks.
 
-**To get an OpenCode response** for every turn, run the body in `external` mode
-(it transcribes and reports the caller, but never speaks on its own) and drive
-the call from OpenCode:
+> **Inbound calls need someone watching.** In `auto`/`external` an inbound call
+> defers to OpenCode, so if **no OpenCode session is polling**, the caller hears
+> the greeting and then silence. Discover inbound calls with `list_calls` (they
+> carry `direction: "inbound"`) and drive them the same way as originated calls.
+> For fully unattended dial-ins that must always be answered, use `VOICE_BRAIN=llm`
+> (accepting that the local model has no project context).
+
+**To get an OpenCode response**, run the body with the control bridge on and let
+OpenCode drive the call:
 
 ```bash
-# auto (default): OpenCode answers calls it originates; inbound uses the local LLM
+# auto (default): OpenCode answers originated *and* inbound calls
 VOICE_BRAIN=auto CONTROL_API_ENABLED=true bash start_production.sh
 
 # or force it: never answer locally, OpenCode answers every turn
@@ -46,7 +58,8 @@ VOICE_BRAIN=external CONTROL_API_ENABLED=true bash start_production.sh
 
 Then, in OpenCode, the loop is:
 
-1. `originate_call` (optionally with `greeting`) → returns a `call_id`.
+1. `originate_call` (optionally with `greeting`) → returns a `call_id`; **or**
+   `list_calls` → pick the `direction: "inbound"` call to answer a dial-in.
 2. Repeatedly `wait_for_input` (returns the caller's `utterance` and a `cursor`
    — pass the cursor back as `after_seq`), then `speak` your reply.
 3. `hangup` when the call is over (or when `call_ended` is true).
@@ -55,7 +68,7 @@ In `external` mode the body still performs STT and reporting; OpenCode owns the
 content. Latency per turn is therefore higher than `VOICE_BRAIN=llm` (OpenCode
 reasoning time replaces the local LLM call) and there is no local fallback if
 OpenCode is not attached. In `auto` mode this latency is masked by the filler for
-calls OpenCode originates.
+any bridged call, inbound included.
 
 ## Step 1: Start All Services
 

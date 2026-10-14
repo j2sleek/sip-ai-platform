@@ -10,6 +10,13 @@ export type CallState =
   | "ended"
   | "failed";
 
+/**
+ * Who initiated the call. `outbound` calls are originated here (backend);
+ * `inbound` calls entered the Stasis app from the dialplan and are registered
+ * by voice_core's first ingest event.
+ */
+export type CallDirection = "inbound" | "outbound";
+
 export type CallEventType =
   | "call.created"
   | "call.ringing"
@@ -49,6 +56,8 @@ export interface CallRecord {
   to: string;
   /** Caller identity presented to the callee. */
   from: string;
+  /** Who initiated the call (see {@link CallDirection}). */
+  direction: CallDirection;
   state: CallState;
   /** Name of the backend that owns this call. */
   backend: string;

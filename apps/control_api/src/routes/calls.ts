@@ -121,16 +121,12 @@ export function callsRoutes(deps: CallsDeps) {
     );
 
     // Ingest: the media body (voice_core) reports call/transcript progress here.
+    // A call control_api did not originate is an *inbound* call (it entered the
+    // [ai] Stasis app from the dialplan); register it on first sight so the
+    // bridge attaches and OpenCode/MCP can drive it like any other call.
     app.post<{ Params: { id: string } }>(
       "/api/v1/calls/:id/events",
       async (request, reply) => {
-        const call = registry.get(request.params.id);
-        if (!call) {
-          return reply
-            .code(404)
-            .send({ error: { code: "not_found", message: "unknown call" } });
-        }
-
         const body = (request.body ?? {}) as { type?: unknown; data?: unknown };
         const type = typeof body.type === "string" ? body.type : "";
         if (!(INGEST_EVENT_TYPES as readonly string[]).includes(type)) {
@@ -142,12 +138,23 @@ export function callsRoutes(deps: CallsDeps) {
           });
         }
 
-        const data =
-          body.data !== null &&
-          typeof body.data === "object" &&
-          !Array.isArray(body.data)
-            ? (body.data as Record<string, unknown>)
-            : {};
+        const data = asRecord(body.data);
+
+        let call = registry.get(request.params.id);
+        if (!call) {
+          const channelId = typeof data.channel_id === "string" ? data.channel_id : "";
+          call = registry.create({
+            id: request.params.id,
+            to: asString(data.to),
+            from: asString(data.from),
+            backend: backend.name,
+            direction: "inbound",
+            meta: {
+              ...(channelId !== "" ? { channelId } : {}),
+              inbound: true,
+            },
+          });
+        }
 
         if (type === "call.answered") registry.setState(call.id, "answered");
         if (type === "call.ended") registry.setState(call.id, "ended");
@@ -187,6 +194,16 @@ export function callsRoutes(deps: CallsDeps) {
       },
     );
   };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function sendBackendError(

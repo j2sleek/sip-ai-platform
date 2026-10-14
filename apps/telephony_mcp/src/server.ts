@@ -84,7 +84,10 @@ export function createServer(client: ControlApiClient, waitDefaults: {
     "list_calls",
     {
       title: "List calls",
-      description: "List known calls (most recent first).",
+      description:
+        "List known calls (most recent first). Inbound calls (dialled in) appear " +
+        "with direction \"inbound\" — use one of those ids with wait_for_input/speak " +
+        "to answer a ringing dial-in that no originate_call created.",
       inputSchema: {},
     },
     async () => {
@@ -101,7 +104,7 @@ export function createServer(client: ControlApiClient, waitDefaults: {
     {
       title: "Get call",
       description: "Get a call's current status and transcript.",
-      inputSchema: { call_id: z.string().describe("The call_id returned by originate_call") },
+      inputSchema: { call_id: z.string().describe("A call_id from originate_call or list_calls") },
     },
     async ({ call_id }) => {
       try {

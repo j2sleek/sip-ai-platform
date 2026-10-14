@@ -24,6 +24,7 @@ defmodule VoiceCore.CallSession do
     :caller_id,
     :destination,
     :source,
+    :direction,
     :state,
     :media_session,
     :voice_agent,
@@ -38,12 +39,14 @@ defmodule VoiceCore.CallSession do
 
   @type t :: %__MODULE__{}
   @type state :: :new | :connected | :media_active | :ending | :ended
+  @type direction :: :inbound | :outbound | :unknown
 
-  @spec new(String.t(), atom(), String.t(), String.t()) :: t()
-  def new(call_id, source, caller_id, destination) do
+  @spec new(String.t(), atom(), String.t(), String.t(), direction()) :: t()
+  def new(call_id, source, caller_id, destination, direction \\ :unknown) do
     %__MODULE__{
       call_id: call_id,
       source: source,
+      direction: direction,
       caller_id: caller_id,
       destination: destination,
       state: :new,
@@ -132,7 +135,8 @@ defmodule VoiceCore.CallSession do
         call_id,
         Map.get(args, :source, :unknown),
         Map.get(args, :caller_id, ""),
-        Map.get(args, :destination, "")
+        Map.get(args, :destination, ""),
+        Map.get(args, :direction, :unknown)
       )
 
     # If the channel id is known up front (dispatcher path), publish the mapping
@@ -217,7 +221,17 @@ defmodule VoiceCore.CallSession do
   # when the bridge is disabled).
   def handle_info({:media_ready, conn_id}, state) do
     Logger.info("CallSession #{state.call_id}: media ready (#{conn_id})", call_id: state.call_id)
-    VoiceCore.ControlApi.report(state.call_id, "call.answered", %{conn_id: conn_id})
+
+    # `direction` lets control_api register inbound calls it did not originate,
+    # so the bridge attaches and OpenCode can answer them (it otherwise only
+    # knew about calls it originated).
+    VoiceCore.ControlApi.report(state.call_id, "call.answered", %{
+      conn_id: conn_id,
+      channel_id: state.channel_id,
+      from: state.caller_id,
+      to: state.destination,
+      direction: to_string(state.direction)
+    })
 
     {:noreply, %{state | state: :media_active, channel_state: "media_active"} |> start_control()}
   end
@@ -373,7 +387,8 @@ defmodule VoiceCore.CallSession do
         VoiceCore.ControlBus.start_link(%{
           call_id: state.call_id,
           agent: state.voice_agent,
-          greeting: state.greeting
+          greeting: state.greeting,
+          direction: state.direction
         })
 
       %{state | control_bus: pid}
@@ -412,6 +427,7 @@ defmodule VoiceCore.CallSession do
       state: state.state,
       caller_id: state.caller_id,
       destination: state.destination,
+      direction: state.direction,
       channel_id: state.channel_id,
       channel_state: state.channel_state,
       start_time: state.start_time,

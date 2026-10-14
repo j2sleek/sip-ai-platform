@@ -151,6 +151,7 @@ export class AriBackend implements CallBackend {
       to: request.to,
       from: request.from ?? "voice_core",
       backend: this.name,
+      direction: "outbound",
       meta: { channelId, endpoint },
     });
     this.registry.append(id, "call.created", { to: request.to, endpoint });

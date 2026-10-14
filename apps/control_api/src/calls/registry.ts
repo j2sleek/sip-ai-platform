@@ -11,7 +11,7 @@
 
 import { EventEmitter } from "node:events";
 
-import type { CallEvent, CallEventType, CallRecord, CallState } from "./types.js";
+import type { CallDirection, CallEvent, CallEventType, CallRecord, CallState } from "./types.js";
 
 interface EventEnvelope {
   callId: string;
@@ -34,12 +34,14 @@ export class CallRegistry {
     to: string;
     from: string;
     backend: string;
+    direction?: CallDirection;
     meta?: Record<string, unknown>;
   }): CallRecord {
     const created: CallRecord = {
       id: record.id,
       to: record.to,
       from: record.from,
+      direction: record.direction ?? "outbound",
       state: "queued",
       backend: record.backend,
       createdAt: new Date().toISOString(),

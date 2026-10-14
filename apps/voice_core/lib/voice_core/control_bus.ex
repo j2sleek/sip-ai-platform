@@ -10,14 +10,17 @@ defmodule VoiceCore.ControlBus do
 
   It is also the oracle for *whether* control_api owns the call: on the first
   successful poll it tells the agent `{:bridge, :attached}`; when control_api
-  reports the call unknown (`:not_found`, i.e. an inbound call) it tells the
-  agent `{:bridge, :absent}` before stopping. `VoiceCore.Brain.Auto` uses that to
-  pick the external vs local brain per call (Layer 3, ADR-0017).
+  reports the call unknown (`:not_found`) it tells the agent `{:bridge, :absent}`
+  before stopping. `VoiceCore.Brain.Auto` uses that to pick the external vs local
+  brain per call (Layer 3, ADR-0017/0018).
+
+  Inbound calls are registered by control_api from voice_core's first ingest
+  event, so they get a bridge too (and can be answered by OpenCode). Because no
+  greeting is queued for an inbound call by a backend, the bus speaks the
+  configured local greeting once for `:inbound` calls.
 
   Long-polling (rather than pushing) keeps voice_core free of an inbound HTTP
-  surface: it only makes outbound, timeout-bounded requests. When the call is not
-  known to control_api (inbound calls), the bus speaks the configured local
-  greeting once and stops.
+  surface: it only makes outbound, timeout-bounded requests.
   """
 
   use GenServer
@@ -34,12 +37,17 @@ defmodule VoiceCore.ControlBus do
       call_id: Map.fetch!(args, :call_id),
       agent: Map.fetch!(args, :agent),
       greeting: Map.get(args, :greeting, ""),
+      direction: Map.get(args, :direction, :outbound),
       cursor: Map.get(args, :cursor, 0),
       greeted: false,
       notified: false,
       poll_wait_ms: Map.get(args, :poll_wait_ms, 1_000),
       request_timeout_ms: Map.get(args, :request_timeout_ms, 3_000)
     }
+
+    # An inbound call has no backend to queue a greeting, so greet locally now;
+    # an outbound call's greeting arrives as the first `agent.speak` event.
+    state = if state.direction == :inbound, do: maybe_greet(state), else: state
 
     send(self(), :poll)
     {:ok, state}
@@ -60,8 +68,9 @@ defmodule VoiceCore.ControlBus do
         {:noreply, state}
 
       {:error, :not_found} ->
-        # Not a control_api-originated call (e.g. an inbound call) — tell the
-        # agent there is no bridge, greet from local config, and stop polling.
+        # Fallback: control_api does not know this call (registration failed, or
+        # the bridge was disabled mid-call). Tell the agent there is no bridge,
+        # greet from local config, and stop polling.
         send(state.agent, {:bridge, :absent})
         state = maybe_greet(state)
         {:stop, :normal, state}

@@ -128,6 +128,53 @@ test("unknown call is 404", async () => {
   await app.close();
 });
 
+test("ingest registers an unknown (inbound) call so the bridge can attach", async () => {
+  const app = await buildApp(testConfig());
+  const id = "11111111-1111-4111-8111-111111111111";
+
+  // voice_core reports call.answered for a call control_api did not originate.
+  const res = await app.inject({
+    method: "POST",
+    url: `/api/v1/calls/${id}/events`,
+    payload: {
+      type: "call.answered",
+      data: { channel_id: "1791971499.50", from: "1001", to: "2000", direction: "inbound" },
+    },
+  });
+  assert.equal(res.statusCode, 202);
+
+  const call = (await app.inject({ method: "GET", url: `/api/v1/calls/${id}` })).json().call;
+  assert.equal(call.direction, "inbound");
+  assert.equal(call.state, "answered");
+  assert.equal(call.to, "2000");
+  assert.equal(call.from, "1001");
+
+  // The registered call is now drivable like any other (OpenCode/MCP).
+  const speak = await app.inject({
+    method: "POST",
+    url: `/api/v1/calls/${id}/speak`,
+    payload: { text: "I see the call." },
+  });
+  assert.equal(speak.statusCode, 202);
+
+  await app.close();
+});
+
+test("ingest still rejects unknown event types", async () => {
+  const app = await buildApp(testConfig());
+  const res = await app.inject({
+    method: "POST",
+    url: "/api/v1/calls/whatever/events",
+    payload: { type: "not.a.type", data: {} },
+  });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error.code, "bad_request");
+  // A rejected event must not register the call.
+  const unknown = await app.inject({ method: "GET", url: "/api/v1/calls/whatever" });
+  assert.equal(unknown.statusCode, 404);
+  await app.close();
+});
+
 test("list returns originated calls", async () => {
   const app = await buildApp(testConfig());
   await app.inject({ method: "POST", url: "/api/v1/calls", payload: { to: "1000" } });

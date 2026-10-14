@@ -90,7 +90,9 @@ Implement:
 
 Acceptance:
 
-- Elixir detects inbound calls.
+- Elixir detects inbound calls and classifies direction (`:inbound` vs
+  `:outbound`); inbound calls register with `control_api` so the OpenCode bridge
+  attaches (ADR-0018).
 - Elixir can answer calls.
 - Elixir can hang up calls.
 - Elixir can originate calls.
@@ -354,7 +356,7 @@ now implemented. The decision is recorded as **ADR-0010** in
 | Phase 3 (ARI) | `voice_core` ARI connection + channel/turn wiring (config-gated) |
 | Phase 4 (media) | AudioSocket adapter behind `MediaTransport`; event-driven server |
 | Phase 5 (AI svcs) | `stt`/`llm`/`tts`/`vad` HTTP services, stdlib-only, provider interfaces (mock default; whisper.cpp/Ollama/Piper opt-in) |
-| Phase 6 (agent) | `VoiceCore.VoiceAgent` (body) + `VoiceCore.Brain` interface (`Static`, `HTTPLLM`, `External`, `Auto`) with `respond/3`; per-turn sequencing, safe timer cancellation, bounded replies (ADR-0015); OpenCode-external brain mode (ADR-0016); direction-aware brain + latency filler (ADR-0017) |
+| Phase 6 (agent) | `VoiceCore.VoiceAgent` (body) + `VoiceCore.Brain` interface (`Static`, `HTTPLLM`, `External`, `Auto`) with `respond/3`; per-turn sequencing, safe timer cancellation, bounded replies (ADR-0015); OpenCode-external brain mode (ADR-0016); direction-aware brain + latency filler (ADR-0017); inbound-call bridge registration + delegation (ADR-0018) |
 | Phase 7 (barge-in) | Endpointing + turn state machine + barge-in detection in `VoiceAgent.Turn` (TTS-cancel wiring is the remaining piece) |
 | Phase 9 (outbound) | `control_api` outbound-call API with `simulated` + `ari` backends; per-call event log + long-poll |
 | MCP brain | `telephony_mcp` MCP stdio server + `demo-voice-loop.mjs` end-to-end demo |
@@ -377,9 +379,15 @@ node apps/telephony_mcp/scripts/demo-voice-loop.mjs
   growing with reply size.
 - ADR-0016: added `VOICE_BRAIN=external` so OpenCode (via the telephony MCP
   tools) can be the sole brain answering a call.
-- ADR-0017: `VOICE_BRAIN=auto` routes per call — OpenCode-originated calls defer
-  to OpenCode, inbound calls answer with the local `llm` — and masks the OpenCode
+- ADR-0017: `VOICE_BRAIN=auto` routes per call — a bridged call defers to
+  OpenCode, an unbridged one answers with the local `llm` — and masks OpenCode
   turn latency with a short local filler (`AGENT_FILLER_*`).
+- ADR-0018: inbound calls register with `control_api` on the body's first
+  `call.answered` report, so they get a bridge and delegate to OpenCode too (the
+  stateless local model used to answer and hallucinate project details).
+  `CallRecord.direction` (`inbound`/`outbound`) is surfaced by `GET /calls`; an
+  inbound call with no OpenCode session watching gets the local greeting then
+  silence — use `VOICE_BRAIN=llm` for unattended dial-ins.
 
 **Still open**
 

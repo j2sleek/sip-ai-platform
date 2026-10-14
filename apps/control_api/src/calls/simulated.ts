@@ -40,6 +40,7 @@ export class SimulatedBackend implements CallBackend {
       to: request.to,
       from: request.from ?? "voice_core",
       backend: this.name,
+      direction: "outbound",
       meta: { simulated: true },
     });
 

@@ -656,7 +656,62 @@ inbound call is answered fast by the local model. No SIP/Asterisk logic moves
 into the brain, media stays behind `MediaTransport`, and the brain/body split is
 intact (AGENTS.md rules 1–5). Known limits: inbound calls have no OpenCode hook,
 so they cannot delegate to OpenCode (an agent would have to discover the call via
-`list_calls`); the filler is a single masked gap, not a queue — a very long
-OpenCode turn may still leave silence after it; and `:unknown`-bridge turns fall
-back to the local brain, so a rare first-turn race can produce a local answer on
-an OpenCode call.
+`list_calls`) — **superseded by ADR-0018**, which registers inbound calls with
+`control_api` so they get a bridge too; the filler is a single masked gap, not a
+queue — a very long OpenCode turn may still leave silence after it; and
+`:unknown`-bridge turns fall back to the local brain, so a rare first-turn race
+can produce a local answer on an OpenCode call.
+
+## ADR-0018 — Inbound calls register with control_api and delegate to OpenCode
+
+**Status:** Accepted (OpenCode-integration follow-up)
+
+**Context:** ADR-0017 made direction decide the brain, but only calls
+`control_api` *originated* had a bridge: an inbound call (dialled into the `[ai]`
+Stasis app) was reported to `control_api` as an unknown id, so the bridge stood
+down (`:bridge absent`) and the local, stateless LLM answered. A live inbound
+call asking for a project status report produced a confident, entirely
+hallucinated answer — the local model has no project context (Layer 1 was
+deliberately left out to protect the free-tier token budget). The fix the user
+asked for is not "give the local model context" but "let inbound calls delegate
+to OpenCode", i.e. give them a bridge.
+
+**Decision:**
+
+1. **`control_api` registers inbound calls on first ingest.**
+   `POST /api/v1/calls/:id/events` no longer 404s for an unknown id: a call
+   `control_api` did not originate is, by definition, an inbound call (it entered
+   Stasis from the dialplan), so the registry creates it with
+   `direction: "inbound"` and the reporting body's `channel_id` in `meta` (used by
+   the ARI backend to hang the right channel up). `CallRecord` gains a
+   `direction: "inbound" | "outbound"` field, surfaced by `GET /calls` so an MCP
+   client can tell them apart. Unsupported event *types* are still rejected with
+   `400` **before** any registration, so bad input cannot create a call.
+
+2. **`voice_core` reports direction and channel at call start.** The ARI
+   dispatcher classifies a channel as `:outbound` when its id is the call id
+   (a UUID — control_api set `channelId = call_id`) and `:inbound` otherwise.
+   `CallSession` carries `direction`, includes `channel_id`/`from`/`to`/
+   `direction` in its `call.answered` report (sent on media-ready, before the
+   `ControlBus` starts, so registration always wins the race), and passes
+   `direction` to `ControlBus`.
+
+3. **Inbound calls get a bridge and delegate.** Because registration happens
+   before the bus's first poll, the bus now gets `:attached` for inbound calls
+   too, so `Brain.Auto` defers to `Brain.External` — the hallucinating local model
+   is out of the inbound path. Since no backend queues a greeting for an inbound
+   call, `ControlBus` speaks the configured local greeting **once** for
+   `:inbound` calls (a greeting is not an answer, and it avoids dead air while
+   OpenCode notices the call). The `:not_found` → `{:bridge, :absent}` path is
+   kept as a fallback (registration failed, or the bridge was disabled mid-call).
+
+**Consequences:** An inbound call is now a first-class `control_api` call: an
+OpenCode session discovers it with `list_calls` and drives it with
+`wait_for_input` → `speak` → `hangup`, exactly like an originated call. The
+local hallucination is gone from the inbound path. Trade-off: because inbound
+calls now *defer*, an inbound call with **no OpenCode session watching** gets the
+local greeting and then silence — the same contract as `VOICE_BRAIN=external`
+(ADR-0016). Run an OpenCode poll loop when you want dial-ins answered fully; use
+`VOICE_BRAIN=llm` if unattended dial-ins must always be answered locally. No
+SIP/Asterisk control logic moves into the brain; media stays behind
+`MediaTransport`; the brain/body split is intact (AGENTS.md rules 1–5).

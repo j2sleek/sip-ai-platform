@@ -126,4 +126,33 @@ defmodule VoiceCore.ControlBusTest do
     # The bus ends itself once it learns the call is not a control_api call.
     assert_receive {:DOWN, ^ref, :process, ^bus, :normal}, 2_000
   end
+
+  test "an inbound call greets locally then stays bridged for OpenCode" do
+    body =
+      Jason.encode!(%{
+        "events" => [
+          %{"seq" => 1, "type" => "agent.speak", "data" => %{"text" => "opencode here"}}
+        ],
+        "cursor" => 1
+      })
+
+    {port, _pid, listen} = start_stub(fn _path -> {200, body} end)
+    on_exit(fn -> :gen_tcp.close(listen) end)
+    configure(port)
+
+    start_supervised!(
+      {ControlBus,
+       %{
+         call_id: "call-bus-3",
+         agent: self(),
+         greeting: "local greeting",
+         direction: :inbound
+       }},
+      restart: :temporary
+    )
+
+    assert_receive {:speak, "local greeting"}, 2_000
+    assert_receive {:bridge, :attached}, 2_000
+    assert_receive {:speak, "opencode here"}, 2_000
+  end
 end

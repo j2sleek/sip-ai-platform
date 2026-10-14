@@ -61,8 +61,14 @@ defmodule VoiceCore.ARI.Dispatcher do
       {:error, :not_found} ->
         call_id = VoiceCore.ARI.call_id(channel_id)
 
+        # ARI-originated calls set `channelId == call_id` (control_api controls
+        # them); any other channel entered the Stasis app from the dialplan, i.e.
+        # it is an inbound call.
+        direction = if call_id == channel_id, do: :outbound, else: :inbound
+
         case VoiceCore.CallSupervisor.start_call(call_id, %{
                source: :ari,
+               direction: direction,
                channel_id: channel_id,
                caller_id: caller_number(channel),
                destination: channel_extension(channel)

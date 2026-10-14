@@ -27,6 +27,8 @@ export interface CallSummary {
   id: string;
   to: string;
   from: string;
+  /** Who initiated the call: `outbound` (originated here) or `inbound` (dialled in). */
+  direction: "inbound" | "outbound";
   state: CallState;
   backend: string;
   createdAt: string;
