@@ -13,6 +13,9 @@ defmodule VoiceCore.Brain do
     * `VoiceCore.Brain.External` — no local reply: the utterance is reported to
       `control_api` and the brain is OpenCode over the telephony MCP server,
       which replies by posting `agent.speak` (delivered by `ControlBus`).
+    * `VoiceCore.Brain.Auto` — direction-aware: defer to `External` for
+      OpenCode-originated (bridged) calls, answer with `:brain_local` for
+      inbound (unbridged) calls — see ADR-0017.
 
   All implementations must respect a timeout and never raise across the
   boundary — failures become a structured `{:error, reason}`. Returning

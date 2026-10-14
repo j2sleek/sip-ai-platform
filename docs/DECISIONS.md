@@ -605,3 +605,58 @@ model for full OpenCode reasoning (higher turn latency, no local fallback). If
 `control_api` is disabled or does not know the call, `external` mode never
 answers — use `llm` for unattended calls. No SIP/Asterisk logic moves into the
 brain (AGENTS.md rules 1–3 stay intact).
+
+## ADR-0017 — Direction decides the brain, plus a latency filler
+
+**Status:** Accepted (OpenCode-integration follow-up)
+
+**Context:** After ADR-0015/0016 we had two working extremes, verified live:
+`VOICE_BRAIN=llm` is fast (~1 s) but stateless — it knows nothing about the
+project; `VOICE_BRAIN=external` gives OpenCode's full context and tools but costs
+seconds per turn (an agent loop, not one model call). The two are good at
+opposite jobs, and the job is decided by *who owns the call*:
+
+* a call the user **dials in** wants a fast, always-available answer;
+* a call **OpenCode originates** wants OpenCode's reasoning, and a few seconds of
+  latency is acceptable — but silence is not.
+
+Feeding project context into the local LLM was considered and rejected for now:
+it inflates the prompt on every turn (token budget on the free tier).
+
+**Decision:**
+
+1. **Direction decides the brain (`VOICE_BRAIN=auto`).** Add
+   `VoiceCore.Brain.Auto`, which routes per call on a bridge hint:
+   * `:attached` — `control_api` knows the call (OpenCode-originated) → defer to
+     `VoiceCore.Brain.External` (the body transcribes + reports; OpenCode owns
+     *what to say* via the MCP `speak` path).
+   * `:absent` / `:unknown` — inbound, or not yet resolved → answer with
+     `:brain_local` (`VoiceCore.Brain.HTTPLLM`), so a dial-in call is never
+     silent.
+
+   `VoiceCore.ControlBus` — which already discovers whether `control_api` knows
+   the call (`:not_found` for inbound) — is the oracle: it sends the agent
+   `{:bridge, :attached | :absent}` once, and the agent passes `bridge` in the
+   brain context. `auto` becomes the `start_production.sh` default; `llm`,
+   `external`, `static` stay available.
+
+2. **Latency filler (Layer 2).** When the brain defers (an empty reply — i.e. a
+   bridged call), the agent starts a filler timer. If nothing is spoken within
+   `AGENT_FILLER_DELAY_MS` (default 900 ms), it speaks a short rotating phrase
+   (`AGENT_FILLER_TEXTS`) — "Let me check on that." — so the caller hears
+   acknowledgment at ~1 s while OpenCode composes the real answer, which then
+   supersedes it through the normal `speak`/barge-in path. The filler is
+   cancelled the moment real speech arrives, on a newer turn, or on hangup, and
+   is skipped for `:absent` calls (where it would only precede silence). It costs
+   no model tokens.
+
+**Consequences:** An OpenCode-originated call now feels responsive (instant local
+acknowledgment) while still getting OpenCode's full, tool-using answer; an
+inbound call is answered fast by the local model. No SIP/Asterisk logic moves
+into the brain, media stays behind `MediaTransport`, and the brain/body split is
+intact (AGENTS.md rules 1–5). Known limits: inbound calls have no OpenCode hook,
+so they cannot delegate to OpenCode (an agent would have to discover the call via
+`list_calls`); the filler is a single masked gap, not a queue — a very long
+OpenCode turn may still leave silence after it; and `:unknown`-bridge turns fall
+back to the local brain, so a rare first-turn race can produce a local answer on
+an OpenCode call.

@@ -19,15 +19,28 @@ There are two ways a call gets answered, and they must not both run at once
 
 | `VOICE_BRAIN` | Who decides what to say | Use for |
 |---|---|---|
-| `llm` (default) | the body's local `llm` service | fast, unattended calls |
-| `external` | **OpenCode**, via `speak` over MCP | OpenCode-driven conversations |
+| `auto` (default) | direction: OpenCode for OpenCode-originated calls, the local `llm` service for inbound calls | mixed / everyday |
+| `llm` | the body's local `llm` service | fast, unattended calls |
+| `external` | **OpenCode**, via `speak` over MCP | OpenCode-driven conversations only |
 | `static` | canned replies | offline tests/demos |
 
-**To get an OpenCode response, run the body in `external` mode** (it transcribes
-and reports the caller, but never speaks on its own) and drive the call from
-OpenCode:
+**`auto` (ADR-0017)** is usually what you want: a call you *dial in* is answered
+by the fast local `llm` service, while a call **OpenCode originates** defers to
+OpenCode (the body only transcribes + reports). Direction is resolved by
+`voice_core.ControlBus`, which already knows whether `control_api` owns the call.
+On a bridged call the body also speaks a short local filler ("Let me check on
+that.") if OpenCode has not replied within `AGENT_FILLER_DELAY_MS` (default
+900 ms), so the caller hears acknowledgment while OpenCode thinks.
+
+**To get an OpenCode response** for every turn, run the body in `external` mode
+(it transcribes and reports the caller, but never speaks on its own) and drive
+the call from OpenCode:
 
 ```bash
+# auto (default): OpenCode answers calls it originates; inbound uses the local LLM
+VOICE_BRAIN=auto CONTROL_API_ENABLED=true bash start_production.sh
+
+# or force it: never answer locally, OpenCode answers every turn
 VOICE_BRAIN=external CONTROL_API_ENABLED=true bash start_production.sh
 ```
 
@@ -41,7 +54,8 @@ Then, in OpenCode, the loop is:
 In `external` mode the body still performs STT and reporting; OpenCode owns the
 content. Latency per turn is therefore higher than `VOICE_BRAIN=llm` (OpenCode
 reasoning time replaces the local LLM call) and there is no local fallback if
-OpenCode is not attached.
+OpenCode is not attached. In `auto` mode this latency is masked by the filler for
+calls OpenCode originates.
 
 ## Step 1: Start All Services
 
@@ -252,7 +266,8 @@ Expected: Natural conversation between caller and agent, transcript returned suc
 | Linphone can't register | Verify SIP credentials, Asterisk config, firewall/network |
 | No audio in real SIP | Check Asterisk ARI config, RTP ports, network routing |
 | Agent **and** OpenCode both talk | Turn off the local brain: `VOICE_BRAIN=external` (see above) |
-| OpenCode `speak` works but the local agent also replies | Same: the body is still running `VOICE_BRAIN=llm` |
+| OpenCode `speak` works but the local agent also replies | Same: the body is still running `VOICE_BRAIN=llm`; use `auto` or `external` |
+| Long silence before OpenCode's reply on an originated call | `auto` masks this with a filler; tune `AGENT_FILLER_DELAY_MS` / `AGENT_FILLER_ENABLED`, or `AGENT_FILLER_TEXTS` |
 | Call goes silent after a few turns / drops | Fixed in ADR-0015 (timer-state corruption + turn sequencing); update and restart the stack |
 | Replies get longer and slower each turn | Fixed in ADR-0015 (reply clamped to `AGENT_MAX_REPLY_CHARS`, lower `LLM_MAX_TOKENS`) |
 

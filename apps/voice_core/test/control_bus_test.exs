@@ -105,6 +105,7 @@ defmodule VoiceCore.ControlBusTest do
       restart: :temporary
     )
 
+    assert_receive {:bridge, :attached}, 2_000
     assert_receive {:speak, "hello there"}, 2_000
   end
 
@@ -120,6 +121,7 @@ defmodule VoiceCore.ControlBusTest do
       )
 
     ref = Process.monitor(bus)
+    assert_receive {:bridge, :absent}, 2_000
     assert_receive {:speak, "local greeting"}, 2_000
     # The bus ends itself once it learns the call is not a control_api call.
     assert_receive {:DOWN, ^ref, :process, ^bus, :normal}, 2_000

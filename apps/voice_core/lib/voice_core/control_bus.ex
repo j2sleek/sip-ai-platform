@@ -8,6 +8,12 @@ defmodule VoiceCore.ControlBus do
   stream and forwards each instruction to the agent, which owns TTS. It also
   delivers the greeting (the first `agent.speak` queued at originate).
 
+  It is also the oracle for *whether* control_api owns the call: on the first
+  successful poll it tells the agent `{:bridge, :attached}`; when control_api
+  reports the call unknown (`:not_found`, i.e. an inbound call) it tells the
+  agent `{:bridge, :absent}` before stopping. `VoiceCore.Brain.Auto` uses that to
+  pick the external vs local brain per call (Layer 3, ADR-0017).
+
   Long-polling (rather than pushing) keeps voice_core free of an inbound HTTP
   surface: it only makes outbound, timeout-bounded requests. When the call is not
   known to control_api (inbound calls), the bus speaks the configured local
@@ -30,6 +36,7 @@ defmodule VoiceCore.ControlBus do
       greeting: Map.get(args, :greeting, ""),
       cursor: Map.get(args, :cursor, 0),
       greeted: false,
+      notified: false,
       poll_wait_ms: Map.get(args, :poll_wait_ms, 1_000),
       request_timeout_ms: Map.get(args, :request_timeout_ms, 3_000)
     }
@@ -47,13 +54,15 @@ defmodule VoiceCore.ControlBus do
            state.request_timeout_ms
          ) do
       {:ok, events, cursor} ->
+        state = notify_bridge(state, :attached)
         state = Enum.reduce(events, %{state | cursor: cursor}, &handle_event/2)
         send(self(), :poll)
         {:noreply, state}
 
       {:error, :not_found} ->
-        # Not a control_api-originated call (e.g. an inbound call) — greet from
-        # local config and stop polling.
+        # Not a control_api-originated call (e.g. an inbound call) — tell the
+        # agent there is no bridge, greet from local config, and stop polling.
+        send(state.agent, {:bridge, :absent})
         state = maybe_greet(state)
         {:stop, :normal, state}
 
@@ -68,6 +77,14 @@ defmodule VoiceCore.ControlBus do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  # Tell the agent control_api owns this call — once (used by `Brain.Auto`).
+  defp notify_bridge(%{notified: true} = state, _status), do: state
+
+  defp notify_bridge(state, status) do
+    send(state.agent, {:bridge, status})
+    %{state | notified: true}
+  end
 
   defp handle_event(%{"type" => "agent.speak", "data" => data}, state) when is_map(data) do
     case data["text"] do

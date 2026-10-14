@@ -72,16 +72,24 @@ export HOST="${HOST:-127.0.0.1}"
 # and obeying `agent.speak` instructions from it — which is how OpenCode drives a
 # call through the telephony MCP tools.
 #
-#   VOICE_BRAIN=llm       body answers with the local `llm` service (default)
-#   VOICE_BRAIN=external  body only transcribes + reports; OpenCode answers via
+#   VOICE_BRAIN=auto      direction decides (ADR-0017): OpenCode-originated calls
+#                         defer to OpenCode; inbound calls answer with the local
+#                         `llm` service. Default.
+#   VOICE_BRAIN=llm       always answer with the local `llm` service
+#   VOICE_BRAIN=external  never answer locally; OpenCode answers via
 #                         `agent.speak` (needs CONTROL_API_ENABLED=true)
 #   VOICE_BRAIN=static    canned replies (offline tests/demos)
-export VOICE_BRAIN="${VOICE_BRAIN:-llm}"
+export VOICE_BRAIN="${VOICE_BRAIN:-auto}"
 export CONTROL_API_ENABLED="${CONTROL_API_ENABLED:-true}"
 export CONTROL_API_URL="${CONTROL_API_URL:-http://127.0.0.1:${PORT}}"
 export AGENT_GREETING="${AGENT_GREETING:-Hello, this is the AI assistant. How can I help you?}"
 # Cap spoken replies so cloud-TTS latency/playback stay bounded per turn.
 export AGENT_MAX_REPLY_CHARS="${AGENT_MAX_REPLY_CHARS:-320}"
+# Latency filler (Layer 2, ADR-0017): on a bridged call the body speaks a short
+# local phrase after this delay unless real speech arrives first, so the caller
+# is never left in silence while OpenCode composes its reply.
+export AGENT_FILLER_ENABLED="${AGENT_FILLER_ENABLED:-true}"
+export AGENT_FILLER_DELAY_MS="${AGENT_FILLER_DELAY_MS:-900}"
 # Lower the LLM output budget for voice: long, essay-like replies are the main
 # cause of growing per-turn latency. Raise if replies get cut off.
 export LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-320}"

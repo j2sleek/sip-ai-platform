@@ -45,6 +45,15 @@ defmodule VoiceCore.VoiceAgentTest do
     def respond(_t, _c, _timeout), do: {:error, :brain_unavailable}
   end
 
+  defmodule SilentBrain do
+    @moduledoc false
+    # A deferring brain (like `External`, or `Auto` on a bridged call): never
+    # says anything locally, so the body waits for the bridge.
+    @behaviour VoiceCore.Brain
+    @impl true
+    def respond(_t, _c, _timeout), do: {:ok, ""}
+  end
+
   defmodule SlowAI do
     @moduledoc false
     # Transcribes instantly but never finishes synthesis during the test, so the
@@ -256,5 +265,80 @@ defmodule VoiceCore.VoiceAgentTest do
     assert String.length(spoken) <= 40
     assert String.starts_with?(spoken, "This first sentence")
     refute String.contains?(spoken, "breath")
+  end
+
+  test "a deferred turn speaks a local filler while waiting for the bridge" do
+    {:ok, media} = FakeMedia.start_link([])
+
+    {:ok, agent} =
+      VoiceAgent.start_link(%{
+        call_id: "agent-filler-#{System.unique_integer([:positive, :monotonic])}",
+        media_session: media,
+        ai: FakeAI,
+        brain: SilentBrain,
+        filler_delay_ms: 50,
+        filler_texts: ["Let me check on that."]
+      })
+
+    send(agent, {:bridge, :attached})
+
+    for _ <- 1..3, do: send(agent, {:audio, frame(1000)})
+    for _ <- 1..8, do: send(agent, {:audio, frame(0)})
+
+    await(fn -> Enum.any?(VoiceAgent.transcript(agent), &(&1.role == :agent)) end, 2_000)
+
+    assert Enum.any?(
+             VoiceAgent.transcript(agent),
+             &(&1.role == :agent and &1.text == "Let me check on that.")
+           )
+
+    assert FakeMedia.sent(media) != []
+  end
+
+  test "a bridge reply cancels the pending filler" do
+    {:ok, media} = FakeMedia.start_link([])
+
+    {:ok, agent} =
+      VoiceAgent.start_link(%{
+        call_id: "agent-filler-cancel-#{System.unique_integer([:positive, :monotonic])}",
+        media_session: media,
+        ai: FakeAI,
+        brain: SilentBrain,
+        filler_delay_ms: 500,
+        filler_texts: ["Let me check on that."]
+      })
+
+    send(agent, {:bridge, :attached})
+
+    for _ <- 1..3, do: send(agent, {:audio, frame(1000)})
+    for _ <- 1..8, do: send(agent, {:audio, frame(0)})
+
+    # The caller turn is recorded (the brain deferred)...
+    await(fn -> length(VoiceAgent.transcript(agent)) == 1 end)
+
+    # ...and the bridge answers well before the 500 ms filler delay.
+    send(agent, {:speak, "Here is the real answer."})
+    await(fn -> VoiceAgent.mode(agent) == :speaking end)
+
+    Process.sleep(700)
+
+    texts = Enum.map(VoiceAgent.transcript(agent), & &1.text)
+    assert "Here is the real answer." in texts
+    refute "Let me check on that." in texts
+  end
+
+  test "no filler is spoken when the brain answers locally" do
+    {agent, media} = start_agent()
+
+    for _ <- 1..3, do: send(agent, {:audio, frame(1000)})
+    for _ <- 1..8, do: send(agent, {:audio, frame(0)})
+
+    await(fn -> VoiceAgent.mode(agent) == :idle and FakeMedia.sent(media) != [] end)
+    Process.sleep(200)
+
+    refute Enum.any?(
+             VoiceAgent.transcript(agent),
+             &(&1.role == :agent and &1.text == "Let me check on that.")
+           )
   end
 end

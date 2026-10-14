@@ -71,6 +71,21 @@ config :voice_core, :ai,
   tts_timeout_ms: int_env.("TTS_TIMEOUT_MS", 15_000),
   vad_timeout_ms: int_env.("VAD_TIMEOUT_MS", 5_000)
 
+# Filler phrases spoken while the external brain (OpenCode) composes its reply
+# (Layer 2, see ADR-0017). Comma-separated; empty falls back to the default.
+filler_texts =
+  System.get_env(
+    "AGENT_FILLER_TEXTS",
+    "Let me check on that.,One moment.,Let me take a look."
+  )
+  |> String.split(",")
+  |> Enum.map(&String.trim/1)
+  |> Enum.reject(&(&1 == ""))
+  |> case do
+    [] -> ["Let me check on that.", "One moment.", "Let me take a look."]
+    texts -> texts
+  end
+
 # ─── Turn/endpoint heuristics for the in-core voice agent body ──────────────
 # All time-based so the endpoint window does not depend on the media backend's
 # frame size (Asterisk AudioSocket delivers ~20 ms frames).
@@ -88,14 +103,24 @@ config :voice_core, :agent,
   max_reply_chars: int_env.("AGENT_MAX_REPLY_CHARS", 320),
   # Spoken when a call attaches without a brain-supplied greeting (inbound calls).
   greeting:
-    System.get_env("AGENT_GREETING", "Hello, this is the AI assistant. How can I help you?")
+    System.get_env("AGENT_GREETING", "Hello, this is the AI assistant. How can I help you?"),
+  # Latency filler (Layer 2, ADR-0017): when the brain defers (an empty reply —
+  # a bridged/OpenCode call) speak a short local phrase after `filler_delay_ms`
+  # unless real speech arrives first, so the caller never sits in silence while
+  # OpenCode composes its answer.
+  filler_enabled: System.get_env("AGENT_FILLER_ENABLED", "true") == "true",
+  filler_delay_ms: int_env.("AGENT_FILLER_DELAY_MS", 900),
+  filler_texts: filler_texts
 
 # ─── Brain selection ────────────────────────────────────────────────────────
 # "llm"      → VoiceCore.Brain.HTTPLLM (calls the platform `llm` service; drives
-#              fast turn-taking on its own — the default body-side brain)
+#              fast turn-taking on its own)
 # "external" → VoiceCore.Brain.External (no local reply; the brain is OpenCode
 #              over the telephony MCP server, replying via control_api
 #              `agent.speak` — requires CONTROL_API_ENABLED=true)
+# "auto"     → VoiceCore.Brain.Auto (direction decides: OpenCode-originated
+#              calls defer to the external brain; inbound calls answer with the
+#              local brain — see ADR-0017)
 # "static"   → VoiceCore.Brain.Static  (canned replies; tests/offline default)
 brain =
   case System.get_env("VOICE_BRAIN", "static") do
@@ -103,10 +128,13 @@ brain =
     "http_llm" -> VoiceCore.Brain.HTTPLLM
     "external" -> VoiceCore.Brain.External
     "mcp" -> VoiceCore.Brain.External
+    "auto" -> VoiceCore.Brain.Auto
     _ -> VoiceCore.Brain.Static
   end
 
 config :voice_core, :brain, brain
+# Local brain used by `VOICE_BRAIN=auto` for inbound (unbridged) calls.
+config :voice_core, :brain_local, VoiceCore.Brain.HTTPLLM
 
 # ─── control_api bridge (brain ↔ body message bus) ──────────────────────────
 # When enabled, the body reports caller/agent turns to control_api and reads

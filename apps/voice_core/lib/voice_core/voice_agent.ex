@@ -22,6 +22,9 @@ defmodule VoiceCore.VoiceAgent do
 
   alias VoiceCore.VoiceAgent.Turn
 
+  # Fallback filler phrases (Layer 2) when none are configured.
+  @default_filler_texts ["Let me check on that.", "One moment.", "Let me take a look."]
+
   # ─── API ────────────────────────────────────────────────────────────────────
 
   @spec start_link(map()) :: GenServer.on_start()
@@ -53,6 +56,19 @@ defmodule VoiceCore.VoiceAgent do
     max_reply_chars =
       Map.get(args, :max_reply_chars, Map.get(agent_cfg, :max_reply_chars, 320))
 
+    # Layer 2 latency filler: spoken only when the brain defers (empty reply) and
+    # no bridge speech has arrived within `delay_ms` (see ADR-0017).
+    filler = %{
+      enabled: Map.get(args, :filler_enabled, Map.get(agent_cfg, :filler_enabled, true)),
+      delay_ms: Map.get(args, :filler_delay_ms, Map.get(agent_cfg, :filler_delay_ms, 900)),
+      texts:
+        Map.get(
+          args,
+          :filler_texts,
+          Map.get(agent_cfg, :filler_texts, @default_filler_texts)
+        )
+    }
+
     state = %{
       call_id: call_id,
       media_session: Map.fetch!(args, :media_session),
@@ -69,6 +85,14 @@ defmodule VoiceCore.VoiceAgent do
       # stale sequence are dropped, so a superseded turn can never speak over
       # (or behind) the turn that replaced it.
       turn_seq: 0,
+      # Layer 3 bridge status resolved by `ControlBus`: `:attached` → control_api
+      # owns the call (external brain answers); `:absent` → inbound, answer
+      # locally; `:unknown` → not resolved yet (answer locally, safe fallback).
+      bridge: :unknown,
+      # Layer 2 latency-filler state.
+      filler: filler,
+      filler_index: 0,
+      filler_timer: nil,
       # Hard cap on spoken reply length (characters). Bounds TTS synthesis +
       # playback time, which is the dominant per-turn latency for cloud TTS.
       max_reply_chars: max_reply_chars,
@@ -99,6 +123,29 @@ defmodule VoiceCore.VoiceAgent do
     {:noreply, state}
   end
 
+  # `ControlBus` resolved whether control_api owns this call: `:attached` for an
+  # OpenCode-originated call (the external brain answers), `:absent` for an
+  # inbound call we answer locally. `VoiceCore.Brain.Auto` reads this per turn.
+  def handle_info({:bridge, status}, state) when status in [:attached, :absent] do
+    Logger.info("VoiceAgent #{state.call_id}: bridge #{status}", call_id: state.call_id)
+    {:noreply, %{state | bridge: status}}
+  end
+
+  # The brain deferred (empty reply) and no bridge speech has arrived yet: speak
+  # a short local filler so the caller does not sit in silence while the external
+  # brain (OpenCode) composes its answer. Cancelled the instant real speech
+  # arrives (`{:speak, ...}`/barge-in), or if a newer turn supersedes this one,
+  # so it never collides with the bridge.
+  def handle_info({:filler, turn}, state) do
+    if turn == state.turn_seq do
+      {text, state} = next_filler(state)
+      Logger.info("VoiceAgent #{state.call_id}: speaking filler", call_id: state.call_id)
+      {:noreply, start_speaking(text, %{state | filler_timer: nil})}
+    else
+      {:noreply, %{state | filler_timer: nil}}
+    end
+  end
+
   # STT produced a transcript for the current utterance.
   def handle_info({:utterance, turn, text}, state) do
     if turn == state.turn_seq do
@@ -122,8 +169,9 @@ defmodule VoiceCore.VoiceAgent do
       if String.trim(text) == "" do
         # Empty reply: an external/MCP brain defers to the bridge; nothing to say
         # locally. Only stand down if we are still the active (processing) turn —
-        # a bridge `speak` may already have moved us to :speaking.
-        {:noreply, idle_if_processing(state)}
+        # a bridge `speak` may already have moved us to :speaking. Schedule a
+        # filler so the caller hears *something* if OpenCode is slow to reply.
+        {:noreply, schedule_filler(turn, idle_if_processing(state))}
       else
         {:noreply, start_speaking(text, state)}
       end
@@ -214,6 +262,7 @@ defmodule VoiceCore.VoiceAgent do
   def terminate(_reason, state) do
     cancel_timer(state.processing_timer)
     cancel_timer(state.playback_timer)
+    cancel_timer(state.filler_timer)
     Logger.info("VoiceAgent #{state.call_id}: terminating")
     :ok
   end
@@ -223,6 +272,9 @@ defmodule VoiceCore.VoiceAgent do
   defp handle_turn_event(:none, _pcm, state), do: {:noreply, state}
 
   defp handle_turn_event(:speech_start, _pcm, state) do
+    # The caller started talking: a pending filler is no longer needed.
+    state = cancel_filler(state)
+
     case state.mode do
       :speaking ->
         # Barge-in: stop playback now and invalidate the in-flight reply so a
@@ -263,6 +315,8 @@ defmodule VoiceCore.VoiceAgent do
     # A previous turn's watchdog may still be pending; replace it so a stale
     # `:processing_timeout` can't flip a later (or speaking) turn to idle.
     cancel_timer(state.processing_timer)
+    # A new turn supersedes any filler queued for the previous (deferred) turn.
+    cancel_timer(state.filler_timer)
 
     turn = state.turn_seq + 1
     agent = self()
@@ -271,6 +325,8 @@ defmodule VoiceCore.VoiceAgent do
     brain = state.brain
     ai = state.ai
     call_id = state.call_id
+    # Snapshot the bridge status for the brain (Layer 3 routing, ADR-0017).
+    bridge = state.bridge
 
     spawn(fn ->
       result =
@@ -282,7 +338,7 @@ defmodule VoiceCore.VoiceAgent do
 
             send(agent, {:utterance, turn, text})
             VoiceCore.ControlApi.report(call_id, "utterance.user", %{"text" => text})
-            brain.respond(text, %{call_id: call_id}, llm_timeout)
+            brain.respond(text, %{call_id: call_id, bridge: bridge}, llm_timeout)
 
           {:error, reason} ->
             {:error, {:stt_failed, reason}}
@@ -293,7 +349,7 @@ defmodule VoiceCore.VoiceAgent do
 
     timeout = state.stt_timeout_ms + state.llm_timeout_ms + 5_000
     timer = Process.send_after(self(), :processing_timeout, timeout)
-    %{state | processing_timer: timer, turn_seq: state.turn_seq + 1}
+    %{state | processing_timer: timer, turn_seq: state.turn_seq + 1, filler_timer: nil}
   end
 
   # Records an agent utterance, reports it to control_api, and synthesizes +
@@ -317,12 +373,16 @@ defmodule VoiceCore.VoiceAgent do
     # `ArgumentError: not a reference`, taking the whole call down.
     cancel_timer(state.playback_timer)
 
+    # Real speech supersedes any filler queued for a deferred turn.
+    cancel_timer(state.filler_timer)
+
     state = %{
       state
       | transcript: [entry | state.transcript],
         mode: :speaking,
         speak_seq: seq,
-        playback_timer: nil
+        playback_timer: nil,
+        filler_timer: nil
     }
 
     agent = self()
@@ -347,7 +407,40 @@ defmodule VoiceCore.VoiceAgent do
   # Invalidate any in-flight turn so its late STT/brain result is discarded.
   defp invalidate_turn(state) do
     cancel_timer(state.processing_timer)
-    %{state | turn_seq: state.turn_seq + 1, processing_timer: nil}
+    cancel_timer(state.filler_timer)
+
+    %{
+      state
+      | turn_seq: state.turn_seq + 1,
+        processing_timer: nil,
+        filler_timer: nil
+    }
+  end
+
+  # Cancel a pending filler (a superseded/deferred turn no longer needs it).
+  defp cancel_filler(state) do
+    cancel_timer(state.filler_timer)
+    %{state | filler_timer: nil}
+  end
+
+  # Queue a filler for a deferred turn — unless filler is disabled/empty or the
+  # call is known to have no bridge (`:absent`, an inbound call in `external`
+  # mode), where a filler would only be followed by silence.
+  defp schedule_filler(_turn, %{bridge: :absent} = state), do: state
+
+  defp schedule_filler(turn, %{filler: %{enabled: true, delay_ms: delay, texts: [_ | _]}} = state)
+       when is_integer(delay) and delay > 0 do
+    timer = Process.send_after(self(), {:filler, turn}, delay)
+    %{state | filler_timer: timer}
+  end
+
+  defp schedule_filler(_turn, state), do: state
+
+  defp next_filler(%{filler: %{texts: []}} = state), do: {"", state}
+
+  defp next_filler(%{filler: %{texts: texts}} = state) do
+    text = Enum.at(texts, rem(state.filler_index, length(texts)))
+    {text, %{state | filler_index: state.filler_index + 1}}
   end
 
   defp idle_if_processing(%{mode: :processing} = state), do: %{state | mode: :idle}
