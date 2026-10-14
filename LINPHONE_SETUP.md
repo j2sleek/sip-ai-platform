@@ -108,6 +108,21 @@ curl -X POST http://127.0.0.1:4001/api/v1/calls \
 
 ## Troubleshooting
 
+### The phone never rings (account shows "unregistered")
+
+`control_api` returns `Allocation failed` and `asterisk -rx "pjsip show contacts"`
+shows no contact for `1001`. The most common cause on this host is that **the
+server's LAN IP changed**, so the softphone is registering to a stale address:
+
+```bash
+hostname -I                       # current server IP
+asterisk -rx "pjsip show contacts" # expect: 1001/sip:1001@<current-ip>:<port>
+```
+
+Update Linphone's account **Domain / SIP server** to the IP from `hostname -I`
+(transport UDP, port `5060`) and save. If it recurs, fix the address itself — see
+the "Stable SIP address" item in [`PLAN.md`](PLAN.md).
+
 ### The callee sees "Anonymous" instead of a caller ID
 
 Asterisk's outbound `From` is built from the PJSIP endpoint's identity. Two

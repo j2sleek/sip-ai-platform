@@ -374,3 +374,10 @@ node apps/telephony_mcp/scripts/demo-voice-loop.mjs
 - Phase 8 (tool system): `run_n8n_workflow`, `capture_chart`, `get_market_data`.
 - Streaming STT/TTS for lower latency; μ-law/A-law and resampling.
 - Phases 10–13 (observability, security, load, deployment).
+- **Stable SIP address**: the host's LAN IP is dynamic (it moved from
+  `10.214.100.129` to `10.194.241.248`), so a softphone silently loses
+  registration whenever it changes. Pin a stable address (static DHCP lease /
+  fixed tethering subnet, or a resolvable hostname / mDNS name) and point
+  Linphone's proxy at that, or have `control_api`/docs advertise the current SIP
+  server address. Affects `LINPHONE_SETUP.md`, PJSIP transport bind, and any
+  future multi-client deployments.
