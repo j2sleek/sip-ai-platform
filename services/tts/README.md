@@ -60,10 +60,20 @@ PYTHONPATH=src python3 -m tts.server
 The command reads text on stdin and writes raw 16-bit little-endian PCM on
 stdout; the service re-encodes it to big-endian for the wire.
 
+## Cloud providers (outbound connection reuse)
+
+The cloud providers (Groq / OpenRouter / Cartesia) reuse keep-alive HTTP
+connections for their outbound calls, so a burst of requests does not pay DNS +
+TCP + TLS setup on every one. `HTTP_KEEPALIVE=0` disables this (fresh connection
+per request); `HTTP_MAX_IDLE` (default `8`) bounds the idle connections kept per
+provider host. See `docs/DECISIONS.md` ADR-0014.
+
 ## Current limitations
 
 - No model weights are bundled or downloaded by this service.
-- No sample-rate conversion — configure `TTS_SAMPLE_RATE` to match the model.
+- The `command` provider does no sample-rate conversion — configure
+  `TTS_SAMPLE_RATE` to match the model. Cloud providers resample to
+  `TTS_SAMPLE_RATE` with an anti-aliased windowed-sinc filter.
 - No streaming synthesis yet; the whole utterance is synthesized per call.
 
 ## Related

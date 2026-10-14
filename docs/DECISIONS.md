@@ -493,3 +493,40 @@ build + test:
 **Consequences:** Modern toolchain, verified by CI (`scripts/test-all.sh`).
 Fallback if any version regresses: pin TypeScript `^5.9` (documented in the app
 READMEs/troubleshooting).
+
+---
+
+## ADR-0014 — Keep-alive connections for outbound provider calls
+
+**Status:** Accepted (live-call latency follow-up)
+
+**Context:** A voice turn makes an STT, an LLM and a TTS call in quick
+succession, each going out to a cloud provider (Groq by default) from the Python
+service. `urllib.request.urlopen` opens a fresh TCP (and TLS) connection per
+request and drops it immediately, so every turn paid DNS + TCP + TLS setup again
+(~0.3–0.4 s per request over the host's mobile uplink) — a large share of the
+per-turn latency measured on a real Linphone call.
+
+**Decision:** The STT/LLM/TTS services make their outbound provider calls through
+a small, standard-library-only keep-alive helper (`<service>/src/<service>/httpclient.py`):
+
+- it keeps a bounded pool of idle HTTP/1.1 connections per origin
+  (`scheme://host:port`, default `HTTP_MAX_IDLE=8`) and reuses them, so the
+  handshake is paid once per burst rather than once per request;
+- it presents the same call shape (`urlopen(request, timeout)` returning a
+  context-manager response) and raises the same exceptions
+  (`urllib.error.HTTPError` for non-2xx, `urllib.error.URLError` for connection
+  failures) as `urllib`, so providers are unchanged and failures stay classified;
+- a stale pooled connection (server-side keep-alive timeout) is retried once on
+  a fresh connection; a request timeout is never retried (it may be mid-flight);
+- it follows redirects like `urllib` (301/302/303 → GET; 307/308 keep method);
+- it disables itself (`HTTP_KEEPALIVE=0`) or falls back to plain `urllib` when an
+  HTTP proxy is configured, since proxies are not pooled here.
+
+The helper is duplicated per service because the Python runtimes are
+independently buildable (AGENTS.md) — there is no shared Python package.
+
+**Consequences:** Measurably lower per-turn latency and fewer sockets to the
+provider. The localhost Elixir→Python hop already used `:httpc` connection
+pooling, so only the cloud hop changed. Limitation: one extra retry is possible
+on a connection error (never on a timeout); proxied deployments do not benefit.

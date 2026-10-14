@@ -59,6 +59,14 @@ LLM_PROVIDER=ollama LLM_MODEL=llama3.2 OLLAMA_URL=http://127.0.0.1:11434 \
   PYTHONPATH=src python3 -m llm.server
 ```
 
+## Cloud providers (outbound connection reuse)
+
+The cloud providers (Groq / OpenRouter / Gemini) reuse keep-alive HTTP
+connections for their outbound calls, so a burst of requests does not pay DNS +
+TCP + TLS setup on every one. `HTTP_KEEPALIVE=0` disables this (fresh connection
+per request); `HTTP_MAX_IDLE` (default `8`) bounds the idle connections kept per
+provider host. See `docs/DECISIONS.md` ADR-0014.
+
 ## Current limitations
 
 - No model weights are bundled or downloaded by this service.

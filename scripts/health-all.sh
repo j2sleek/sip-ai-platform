@@ -48,8 +48,12 @@ http_health() {
 
 printf 'SIP AI Platform — service health\n'
 
-# HTTP services (defaults match each service's .env.example)
-http_health "control_api" "http://127.0.0.1:${CONTROL_API_PORT:-4000}/health"
+# HTTP services (defaults match each service's .env.example).
+# control_api is the exception: it defaults to 4000 standalone, but the platform
+# runs it on 4001 (see the root .env.example / start_production.sh), so prefer
+# the documented CONTROL_API_URL and fall back to the platform port.
+_control_api_url="${CONTROL_API_URL:-http://127.0.0.1:${CONTROL_API_PORT:-4001}}"
+http_health "control_api" "${_control_api_url%/}/health"
 http_health "stt"         "http://127.0.0.1:${STT_PORT:-5001}/health"
 http_health "llm"         "http://127.0.0.1:${LLM_PORT:-5002}/health"
 http_health "tts"         "http://127.0.0.1:${TTS_PORT:-5003}/health"

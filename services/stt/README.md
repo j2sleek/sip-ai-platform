@@ -57,6 +57,14 @@ STT_COMMAND="whisper-cli -m /models/ggml-base.en.bin -f - -nt -np" \
 PYTHONPATH=src python3 -m stt.server
 ```
 
+## Cloud providers (outbound connection reuse)
+
+The cloud providers (Groq / OpenRouter / Gemini) reuse keep-alive HTTP
+connections for their outbound calls, so a burst of requests does not pay DNS +
+TCP + TLS setup on every one. `HTTP_KEEPALIVE=0` disables this (fresh connection
+per request); `HTTP_MAX_IDLE` (default `8`) bounds the idle connections kept per
+provider host. See `docs/DECISIONS.md` ADR-0014.
+
 ## Current limitations
 
 - No model weights are bundled or downloaded by this service.

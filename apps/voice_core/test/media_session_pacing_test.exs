@@ -71,6 +71,23 @@ defmodule VoiceCore.MediaSessionPacingTest do
     assert Enum.all?(frames, &silent?/1), "flush left queued tone playing"
   end
 
+  test "a long stall resyncs the schedule instead of bursting a backlog", %{pid: pid} do
+    :ok = MediaSession.send_audio(pid, :binary.copy(<<0x12, 0x34>>, 8000))
+
+    # Let a couple of frames go out, then freeze the pacer well past the resync
+    # threshold (5 periods = 100 ms) and resume it.
+    _ = collect_stamps(2)
+    :sys.suspend(pid)
+    Process.sleep(250)
+    :sys.resume(pid)
+
+    # The stale tick fires once on resume; assert it resynced rather than
+    # replaying the backlog at full speed.
+    _ = collect_stamps(1)
+    stats = MediaSession.stats(pid)
+    assert stats.tx_resyncs >= 1, "expected the pacer to resync after a long stall"
+  end
+
   defp collect_stamps(n), do: collect_stamps(n, [])
 
   defp collect_stamps(0, acc), do: Enum.reverse(acc)

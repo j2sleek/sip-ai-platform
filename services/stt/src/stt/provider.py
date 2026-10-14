@@ -32,6 +32,7 @@ import urllib.error
 import urllib.request
 
 from .errors import ProviderError
+from .httpclient import urlopen as _urlopen
 
 DEFAULT_MOCK_TEXT = "reference transcript for testing"
 
@@ -51,15 +52,9 @@ DEFAULT_GEMINI_STT_MODEL = "gemini-2.5-flash"
 DEFAULT_PCM_SAMPLE_RATE = 16000
 
 # Cloudflare (fronting Groq/OpenRouter) rejects the default python-urllib
-# User-Agent with HTTP 403 / error 1010, so every request carries an explicit UA.
-DEFAULT_USER_AGENT = "sip-ai-platform/0.2.0"
-
-
-def _urlopen(request: urllib.request.Request, timeout: float):
-    """urlopen with a stable User-Agent header."""
-    if not request.has_header("User-agent"):
-        request.add_header("User-Agent", DEFAULT_USER_AGENT)
-    return urllib.request.urlopen(request, timeout=timeout)
+# User-Agent with HTTP 403 / error 1010, so `_urlopen` (from .httpclient) always
+# sends an explicit UA. It also pools keep-alive connections to cut per-request
+# DNS + TCP + TLS setup on the cloud path.
 
 
 def _make_wav_header(pcm_bytes: bytes, sample_rate: int = DEFAULT_PCM_SAMPLE_RATE, channels: int = 1, bits_per_sample: int = 16) -> bytes:

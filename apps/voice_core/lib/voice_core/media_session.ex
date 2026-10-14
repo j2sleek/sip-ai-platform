@@ -12,7 +12,8 @@ defmodule VoiceCore.MediaSession do
     * push inbound PCM to the call's `VoiceCore.VoiceAgent` for endpointing;
     * send outbound PCM (TTS output) back over the transport.
 
-  Counters are exposed via `stats/1` (frames rx/tx, DTMF) and telemetry.
+  Counters are exposed via `stats/1` (frames rx/tx, DTMF, outbound pacer resyncs)
+  and telemetry.
   """
 
   use GenServer
@@ -24,6 +25,12 @@ defmodule VoiceCore.MediaSession do
   # whenever the agent has nothing queued (e.g. while TTS is still synthesizing).
   @tx_tick_ms 20
   @frame_bytes 320
+
+  # If a long stall (scheduler pause, GC, a blocked transport send) leaves the
+  # outbound schedule more than this many periods in the past, resync to `now`
+  # rather than bursting queued frames to catch up. Bounded so a hiccup cannot
+  # dump a backlog of audio in a single burst (clicks / jitter-buffer growth).
+  @resync_after_periods 5
 
   # ─── API ────────────────────────────────────────────────────────────────────
 
@@ -94,7 +101,10 @@ defmodule VoiceCore.MediaSession do
       tx_queue: <<>>,
       tx_timer: nil,
       # Absolute due time (monotonic ms) of the next frame — see advance_schedule/2.
-      tx_next_at: nil
+      tx_next_at: nil,
+      # Number of times the pacer fell far enough behind to resync (a stall
+      # indicator; surfaced in stats/1).
+      tx_resyncs: 0
     }
 
     {:ok, state}
@@ -217,8 +227,15 @@ defmodule VoiceCore.MediaSession do
     end
 
     now = System.monotonic_time(:millisecond)
-    next_at = advance_schedule(state.tx_next_at, now)
+    {next_at, resynced?} = advance_schedule(state.tx_next_at, now)
     timer = Process.send_after(self(), :tx_tick, max(next_at - now, 0))
+
+    if resynced? do
+      Logger.warning(
+        "MediaSession #{state.call_id}: outbound pacer fell behind; resynced",
+        call_id: state.call_id
+      )
+    end
 
     {:noreply,
      %{
@@ -226,6 +243,7 @@ defmodule VoiceCore.MediaSession do
        | tx_queue: rest,
          tx_timer: timer,
          tx_next_at: next_at,
+         tx_resyncs: state.tx_resyncs + if(resynced?, do: 1, else: 0),
          audio_frames_tx: state.audio_frames_tx + 1
      }}
   end
@@ -254,6 +272,7 @@ defmodule VoiceCore.MediaSession do
       conn_id: state.conn_id,
       audio_frames_rx: state.audio_frames_rx,
       audio_frames_tx: state.audio_frames_tx,
+      tx_resyncs: state.tx_resyncs,
       dtmf_count: length(state.dtmf_events),
       connected_at: state.connected_at
     }
@@ -283,14 +302,16 @@ defmodule VoiceCore.MediaSession do
   # streaming steadily slower than real time — measured as a ~0.92 RTP clock
   # ratio on a real Linphone call, which grows the client's adaptive jitter
   # buffer to ~145 ms and costs clarity.
-  defp advance_schedule(nil, now), do: now + @tx_tick_ms
+  defp advance_schedule(nil, now), do: {now + @tx_tick_ms, false}
 
   defp advance_schedule(due, now) do
     next = due + @tx_tick_ms
 
-    # If a long stall put us more than ~5 periods behind, resync rather than
-    # bursting a backlog of frames to catch up.
-    if next < now - @tx_tick_ms * 5, do: now + @tx_tick_ms, else: next
+    if next < now - @tx_tick_ms * @resync_after_periods do
+      {now + @tx_tick_ms, true}
+    else
+      {next, false}
+    end
   end
 
   defp cancel_tx(nil), do: nil

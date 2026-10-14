@@ -28,6 +28,7 @@ import urllib.request
 import wave
 
 from .errors import ProviderError
+from .httpclient import urlopen as _urlopen
 
 DEFAULT_SAMPLE_RATE = 8000
 DEFAULT_TONE_HZ = 220.0
@@ -53,15 +54,9 @@ GROQ_TTS_MAX_INPUT_CHARS = 200
 GROQ_TTS_RESPONSE_FORMAT = "wav"
 
 # Cloudflare (fronting Groq/OpenRouter) rejects the default python-urllib
-# User-Agent with HTTP 403 / error 1010, so every request carries an explicit UA.
-DEFAULT_USER_AGENT = "sip-ai-platform/0.2.0"
-
-
-def _urlopen(request: urllib.request.Request, timeout: float):
-    """urlopen with a stable User-Agent header."""
-    if not request.has_header("User-agent"):
-        request.add_header("User-Agent", DEFAULT_USER_AGENT)
-    return urllib.request.urlopen(request, timeout=timeout)
+# User-Agent with HTTP 403 / error 1010, so `_urlopen` (from .httpclient) always
+# sends an explicit UA. It also pools keep-alive connections to cut per-request
+# DNS + TCP + TLS setup on the cloud path.
 
 
 def pcm_s16be(samples: "array.array | list[int]") -> bytes:

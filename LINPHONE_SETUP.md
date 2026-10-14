@@ -152,3 +152,9 @@ cloud AI round-trip (STT → LLM → TTS) over the host's uplink. Confirm end-to
 latency with `run/stt.log`, `run/llm.log`, `run/tts.log` (each line has
 `elapsed_ms`).
 
+The STT/LLM/TTS services now reuse keep-alive HTTP connections to their cloud
+provider (`docs/DECISIONS.md` ADR-0014), so a turn no longer pays DNS + TCP +
+TLS setup on every request. If per-turn latency regresses, check the AI logs for
+reconnect/retry noise and confirm keep-alive is on (`HTTP_KEEPALIVE`, default
+`1`); set `HTTP_KEEPALIVE=0` only to A/B the difference.
+

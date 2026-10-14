@@ -24,6 +24,7 @@ import urllib.request
 from typing import Any
 
 from .errors import ProviderError
+from .httpclient import urlopen as _urlopen
 
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -33,15 +34,9 @@ DEFAULT_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 
 # Cloudflare (fronting Groq/OpenRouter) rejects the default python-urllib
-# User-Agent with HTTP 403 / error 1010, so every request carries an explicit UA.
-DEFAULT_USER_AGENT = "sip-ai-platform/0.2.0"
-
-
-def _urlopen(request: urllib.request.Request, timeout: float):
-    """urlopen with a stable User-Agent header."""
-    if not request.has_header("User-agent"):
-        request.add_header("User-Agent", DEFAULT_USER_AGENT)
-    return urllib.request.urlopen(request, timeout=timeout)
+# User-Agent with HTTP 403 / error 1010, so `_urlopen` (from .httpclient) always
+# sends an explicit UA. It also pools keep-alive connections to cut per-request
+# DNS + TCP + TLS setup on the cloud path.
 DEFAULT_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
