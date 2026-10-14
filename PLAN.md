@@ -354,7 +354,7 @@ now implemented. The decision is recorded as **ADR-0010** in
 | Phase 3 (ARI) | `voice_core` ARI connection + channel/turn wiring (config-gated) |
 | Phase 4 (media) | AudioSocket adapter behind `MediaTransport`; event-driven server |
 | Phase 5 (AI svcs) | `stt`/`llm`/`tts`/`vad` HTTP services, stdlib-only, provider interfaces (mock default; whisper.cpp/Ollama/Piper opt-in) |
-| Phase 6 (agent) | `VoiceCore.VoiceAgent` (body) + `VoiceCore.Brain` interface (`Static`, `HTTPLLM`) with `respond/3` |
+| Phase 6 (agent) | `VoiceCore.VoiceAgent` (body) + `VoiceCore.Brain` interface (`Static`, `HTTPLLM`, `External`) with `respond/3`; per-turn sequencing, safe timer cancellation, bounded replies (ADR-0015); OpenCode-external brain mode (ADR-0016) |
 | Phase 7 (barge-in) | Endpointing + turn state machine + barge-in detection in `VoiceAgent.Turn` (TTS-cancel wiring is the remaining piece) |
 | Phase 9 (outbound) | `control_api` outbound-call API with `simulated` + `ari` backends; per-call event log + long-poll |
 | MCP brain | `telephony_mcp` MCP stdio server + `demo-voice-loop.mjs` end-to-end demo |
@@ -367,6 +367,16 @@ call backend:
 ```sh
 node apps/telephony_mcp/scripts/demo-voice-loop.mjs
 ```
+
+**Live-call reliability fixes (follow-up)**
+
+- ADR-0015: fixed a `VoiceAgent` timer-state corruption that crashed the agent
+  (and ended the call) on barge-in/terminate; added per-turn sequencing so
+  superseded turns can't speak late or out of order; bounded spoken reply length
+  (`AGENT_MAX_REPLY_CHARS`, lower `LLM_MAX_TOKENS`) to stop per-turn latency
+  growing with reply size.
+- ADR-0016: added `VOICE_BRAIN=external` so OpenCode (via the telephony MCP
+  tools) can be the sole brain answering a call.
 
 **Still open**
 

@@ -45,6 +45,18 @@ defmodule VoiceCore.VoiceAgentTest do
     def respond(_t, _c, _timeout), do: {:error, :brain_unavailable}
   end
 
+  defmodule SlowAI do
+    @moduledoc false
+    # Transcribes instantly but never finishes synthesis during the test, so the
+    # agent stays in :speaking with a pending (or replaced) playback watchdog.
+    def transcribe(_pcm, _timeout), do: {:ok, "hello"}
+
+    def synthesize(_text, _timeout) do
+      Process.sleep(30_000)
+      {:ok, :binary.copy(<<0, 120>>, 800)}
+    end
+  end
+
   # 100 ms of 8 kHz 16-bit PCM at a constant sample value (big-endian).
   defp frame(value, samples \\ 800), do: :binary.copy(<<value::signed-big-16>>, samples)
 
@@ -154,5 +166,95 @@ defmodule VoiceCore.VoiceAgentTest do
     await(fn -> VoiceAgent.mode(agent) == :listening end)
 
     assert FakeMedia.flushes(media) > before
+  end
+
+  test "back-to-back speak instructions never corrupt the playback timer" do
+    # Regression: `start_speaking/2` used to store the return value of
+    # `cancel_timer/1` (an integer or `:ok`) in `playback_timer`; the next
+    # `cancel_timer` then raised `ArgumentError: not a reference`, killing the
+    # agent (and the call) on the next barge-in/terminate.
+    {:ok, media} = FakeMedia.start_link([])
+
+    {:ok, agent} =
+      VoiceAgent.start_link(%{
+        call_id: "agent-timer-#{System.unique_integer([:positive, :monotonic])}",
+        media_session: media,
+        ai: SlowAI,
+        brain: VoiceCore.Brain.Static
+      })
+
+    send(agent, {:speak, "first"})
+    send(agent, {:speak, "second"})
+    send(agent, {:speak, "third"})
+
+    assert Process.alive?(agent)
+    assert VoiceAgent.mode(agent) == :speaking
+  end
+
+  test "an external (MCP) brain records the caller turn but never speaks locally" do
+    {:ok, media} = FakeMedia.start_link([])
+
+    {:ok, agent} =
+      VoiceAgent.start_link(%{
+        call_id: "agent-ext-#{System.unique_integer([:positive, :monotonic])}",
+        media_session: media,
+        ai: FakeAI,
+        brain: VoiceCore.Brain.External
+      })
+
+    for _ <- 1..3, do: send(agent, {:audio, frame(1000)})
+    for _ <- 1..8, do: send(agent, {:audio, frame(0)})
+
+    # The body transcribes + records the caller, then stands down (idle) without
+    # synthesizing anything — the bridge owns what to say.
+    await(fn -> length(VoiceAgent.transcript(agent)) == 1 and VoiceAgent.mode(agent) == :idle end)
+    assert FakeMedia.sent(media) == []
+
+    # The bridge (OpenCode) can now speak on the same call.
+    send(agent, {:speak, "Hello from OpenCode"})
+    await(fn -> VoiceAgent.mode(agent) == :speaking end)
+
+    assert Enum.any?(
+             VoiceAgent.transcript(agent),
+             &(&1.role == :agent and &1.text == "Hello from OpenCode")
+           )
+  end
+
+  test "a stale (superseded) turn's reply is dropped" do
+    {agent, media} = start_agent()
+
+    # A reply tagged with a turn that is no longer current must be ignored.
+    send(agent, {:agent_reply, 9_999, {:ok, "stale reply"}})
+    send(agent, {:utterance, 9_999, "stale utterance"})
+    Process.sleep(50)
+
+    assert VoiceAgent.mode(agent) == :idle
+    assert VoiceAgent.transcript(agent) == []
+    assert FakeMedia.sent(media) == []
+  end
+
+  test "spoken replies are clamped to max_reply_chars on a word boundary" do
+    {:ok, media} = FakeMedia.start_link([])
+
+    {:ok, agent} =
+      VoiceAgent.start_link(%{
+        call_id: "agent-clamp-#{System.unique_integer([:positive, :monotonic])}",
+        media_session: media,
+        ai: FakeAI,
+        brain: VoiceCore.Brain.Static,
+        max_reply_chars: 40
+      })
+
+    long =
+      "This first sentence is already far too long to be spoken in one breath. " <>
+        "A second sentence follows."
+
+    send(agent, {:speak, long})
+    await(fn -> VoiceAgent.transcript(agent) != [] end)
+
+    assert [%{role: :agent, text: spoken}] = VoiceAgent.transcript(agent)
+    assert String.length(spoken) <= 40
+    assert String.starts_with?(spoken, "This first sentence")
+    refute String.contains?(spoken, "breath")
   end
 end

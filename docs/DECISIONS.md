@@ -530,3 +530,78 @@ independently buildable (AGENTS.md) — there is no shared Python package.
 provider. The localhost Elixir→Python hop already used `:httpc` connection
 pooling, so only the cloud hop changed. Limitation: one extra retry is possible
 on a connection error (never on a timeout); proxied deployments do not benefit.
+
+---
+
+## ADR-0015 — Robust turn-taking: safe timers, per-turn sequencing, bounded replies
+
+**Status:** Accepted (live-call reliability follow-up)
+
+**Context:** A live Linphone call exposed three compounding problems in
+`VoiceCore.VoiceAgent`:
+
+1. **State corruption → dropped call.** `start_speaking/2` stored the *return
+   value* of `cancel_timer/1` in `playback_timer`. `Process.cancel_timer/1`
+   returns a boolean or a remaining-ms integer (or the field was already the
+   atom `:ok`), so a later `cancel_timer/1` on that non-reference value raised
+   `ArgumentError: not a reference`. It crashed the agent on the next
+   barge-in/terminate; `CallSession` treats an abnormal child exit as fatal, so
+   the **whole call ended** ("I didn't get any response again").
+2. **Overlapping turns / out-of-order speech.** Barge-in during `:processing`
+   moved the agent to `:listening` but did not cancel the in-flight STT/LLM
+   turn, so a late reply from the superseded turn could be spoken *after* the
+   caller had moved on. Endpointing while `:processing` silently dropped the
+   caller's new utterance instead of answering it.
+3. **Growing per-turn latency.** The model's replies grew each turn (31 → 310
+   chars); cloud TTS latency and playback time both scale with length (a 310-char
+   reply took ~5 s to synthesize *and* ~22 s to play), so turns felt slower and
+   slower.
+
+**Decision:**
+
+- `cancel_timer/1` accepts only `nil`/a timer reference, never raises, and always
+  returns `:ok`; callers never store its result. `playback_timer` is reset to
+  `nil` explicitly.
+- Every caller utterance gets a monotonic `turn_seq`; STT and brain results carry
+  it and are dropped when stale. A new endpoint supersedes any in-flight turn
+  (no silent drops); a barge-in invalidates the pending turn so its reply can
+  never speak over the caller. A `{:speak, ...}` from the bridge also invalidates
+  the in-flight local turn.
+- Spoken replies are clamped to `AGENT_MAX_REPLY_CHARS` (default 320) on a
+  sentence/word boundary, the HTTPLLM system prompt asks for ~30-word replies,
+  and `start_production.sh` lowers the Groq `LLM_MAX_TOKENS` default (320) with
+  `LLM_REASONING_EFFORT=low`.
+
+**Consequences:** Calls survive barge-in and barge-in-during-thinking; utterance
+answers stay in order; per-turn latency is bounded by a constant instead of
+growing with conversation length. Trade-off: very long answers are truncated
+(raise `AGENT_MAX_REPLY_CHARS` / `LLM_MAX_TOKENS` to trade latency for length).
+
+---
+
+## ADR-0016 — `VOICE_BRAIN=external`: letting OpenCode answer the call
+
+**Status:** Accepted (OpenCode-integration follow-up)
+
+**Context:** ADR-0010 defines OpenCode as the brain, and the plumbing exists —
+`control_api` exposes `originate_call`/`speak`/`events`, `telephony_mcp` wraps it
+for OpenCode, and `voice_core.ControlBus` polls `agent.speak` and forwards it to
+the agent. But the body *always* answered with its own `VoiceCore.Brain`
+(`llm`/`static`), so an OpenCode `speak` would collide with the local reply: there
+was no way to make OpenCode the sole brain.
+
+**Decision:** Add `VoiceCore.Brain.External`, selected with
+`VOICE_BRAIN=external` (with `CONTROL_API_ENABLED=true`). In this mode
+`respond/3` returns `{:ok, ""}`: the body transcribes the caller, reports
+`utterance.user` to `control_api`, stands down to `:idle`, and says nothing
+locally. The reply arrives asynchronously as an `agent.speak` instruction from
+OpenCode, which `ControlBus` forwards and the agent speaks. An empty brain reply
+therefore means "defer to the bridge".
+
+**Consequences:** OpenCode can now drive a call end-to-end
+(`originate_call` → loop of `wait_for_input` → `speak` → `hangup`). `VOICE_BRAIN=llm`
+remains the default low-latency body-side brain; `external` trades the local
+model for full OpenCode reasoning (higher turn latency, no local fallback). If
+`control_api` is disabled or does not know the call, `external` mode never
+answers — use `llm` for unattended calls. No SIP/Asterisk logic moves into the
+brain (AGENTS.md rules 1–3 stay intact).

@@ -1,13 +1,25 @@
 defmodule VoiceCore.Brain.HTTPLLM do
   @moduledoc """
   `VoiceCore.Brain` implementation that asks the platform `llm` service over
-  HTTP (Ollama behind the service's provider interface).
+  HTTP (the service's provider interface; Ollama/Groq/etc).
 
   Uses OTP `:httpc` (no extra dependencies) with an explicit timeout; any
   failure (timeout, non-200, unparseable body) becomes a structured error.
+
+  The system prompt keeps replies short and speech-friendly: TTS synthesis and
+  playback time both scale with reply length, so a chatty model is the main
+  cause of growing per-turn latency. The agent also clamps spoken replies
+  (`AGENT_MAX_REPLY_CHARS`) as a hard backstop.
   """
 
   @behaviour VoiceCore.Brain
+
+  @base_system_prompt """
+  You are a voice assistant on a live phone call. Your reply is spoken aloud by
+  text-to-speech, so use plain prose only: no markdown, no lists, no headings,
+  no emoji, no stage directions. Answer in one or two short sentences (about 30
+  words maximum) and ask a brief follow-up question when that is natural.
+  """
 
   @spec new(keyword()) :: :ok
   def new(_opts), do: :ok
@@ -43,20 +55,17 @@ defmodule VoiceCore.Brain.HTTPLLM do
   end
 
   defp system_prompt(%{call_id: call_id}) when is_binary(call_id) do
-    "You are the voice agent on call #{call_id}. Reply with a short, natural " <>
-      "spoken response (1-3 sentences). No markdown."
+    @base_system_prompt <> "\n(Current call id: #{call_id}.)"
   end
 
-  defp system_prompt(_context) do
-    "You are the voice agent. Reply with a short, natural spoken response (1-3 sentences). No markdown."
-  end
+  defp system_prompt(_context), do: @base_system_prompt
 
   defp parse_response(body) do
     case Jason.decode(body) do
       {:ok, %{"response" => text}} when is_binary(text) -> {:ok, String.trim(text)}
       {:ok, %{"choices" => [%{"message" => %{"content" => text}}]}} -> {:ok, String.trim(text)}
       {:ok, %{"choices" => [%{"text" => text}]}} -> {:ok, String.trim(text)}
-      {:ok, _other} -> {:error, :unexpected_llm_payload}
+      {:ok, _} -> {:error, :unexpected_llm_payload}
       {:error, _} -> {:error, :invalid_llm_json}
     end
   end

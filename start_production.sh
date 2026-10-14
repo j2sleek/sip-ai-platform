@@ -17,9 +17,10 @@
 #
 # Common overrides:
 #   LLM_PROVIDER STT_PROVIDER TTS_PROVIDER
-#   LLM_MODEL STT_GROQ_MODEL TTS_GROQ_MODEL TTS_GROQ_VOICE
+#   LLM_MODEL STT_GROQ_MODEL TTS_GROQ_MODEL TTS_GROQ_VOICE LLM_MAX_TOKENS
 #   PORT HOST ARI_USERNAME ARI_APP ARI_BASE_URL
 #   VOICE_BRAIN CONTROL_API_ENABLED CONTROL_API_URL AGENT_GREETING
+#   AGENT_MAX_REPLY_CHARS VAD_SILENCE_MS  (turn-taking / latency tuning)
 #   HTTP_KEEPALIVE HTTP_MAX_IDLE  (AI-service outbound connection reuse; ADR-0014)
 #
 set -euo pipefail
@@ -67,13 +68,24 @@ export HOST="${HOST:-127.0.0.1}"
 
 # ─── voice_core ↔ control_api bridge + brain ────────────────────────────────
 # voice_core is the body (media + STT/TTS). By default it drives turn-taking with
-# the local `llm` service ("hybrid" mode) while ALSO reporting the live transcript
-# to control_api and obeying `agent.speak` instructions from it — which is how
-# OpenCode drives a call through the telephony MCP tools.
+# the local `llm` service while ALSO reporting the live transcript to control_api
+# and obeying `agent.speak` instructions from it — which is how OpenCode drives a
+# call through the telephony MCP tools.
+#
+#   VOICE_BRAIN=llm       body answers with the local `llm` service (default)
+#   VOICE_BRAIN=external  body only transcribes + reports; OpenCode answers via
+#                         `agent.speak` (needs CONTROL_API_ENABLED=true)
+#   VOICE_BRAIN=static    canned replies (offline tests/demos)
 export VOICE_BRAIN="${VOICE_BRAIN:-llm}"
 export CONTROL_API_ENABLED="${CONTROL_API_ENABLED:-true}"
 export CONTROL_API_URL="${CONTROL_API_URL:-http://127.0.0.1:${PORT}}"
 export AGENT_GREETING="${AGENT_GREETING:-Hello, this is the AI assistant. How can I help you?}"
+# Cap spoken replies so cloud-TTS latency/playback stay bounded per turn.
+export AGENT_MAX_REPLY_CHARS="${AGENT_MAX_REPLY_CHARS:-320}"
+# Lower the LLM output budget for voice: long, essay-like replies are the main
+# cause of growing per-turn latency. Raise if replies get cut off.
+export LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-320}"
+export LLM_REASONING_EFFORT="${LLM_REASONING_EFFORT:-low}"
 
 # ─── AudioSocket media endpoint (must match the [ai] dialplan context) ──────
 export AUDIOSOCKET_BIND_HOST="${AUDIOSOCKET_BIND_HOST:-127.0.0.1}"

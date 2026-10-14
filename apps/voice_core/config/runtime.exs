@@ -82,18 +82,27 @@ config :voice_core, :agent,
   silence_ms_to_endpoint: int_env.("VAD_SILENCE_MS", 700),
   # Ignore blips shorter than this (clicks, keypad thumps, single coughs)
   min_speech_ms: int_env.("VAD_MIN_SPEECH_MS", 200),
+  # Hard cap on spoken reply length. Bounds TTS synthesis + playback time, which
+  # is the dominant per-turn latency for cloud TTS (a 310-char reply took ~5 s
+  # to synthesize). Replies are clamped on a sentence/word boundary.
+  max_reply_chars: int_env.("AGENT_MAX_REPLY_CHARS", 320),
   # Spoken when a call attaches without a brain-supplied greeting (inbound calls).
   greeting:
     System.get_env("AGENT_GREETING", "Hello, this is the AI assistant. How can I help you?")
 
 # ─── Brain selection ────────────────────────────────────────────────────────
-# "llm"      → VoiceCore.Brain.HTTPLLM (calls the platform `llm` service; default
-#              for production, drives fast turn-taking on its own)
+# "llm"      → VoiceCore.Brain.HTTPLLM (calls the platform `llm` service; drives
+#              fast turn-taking on its own — the default body-side brain)
+# "external" → VoiceCore.Brain.External (no local reply; the brain is OpenCode
+#              over the telephony MCP server, replying via control_api
+#              `agent.speak` — requires CONTROL_API_ENABLED=true)
 # "static"   → VoiceCore.Brain.Static  (canned replies; tests/offline default)
 brain =
   case System.get_env("VOICE_BRAIN", "static") do
     "llm" -> VoiceCore.Brain.HTTPLLM
     "http_llm" -> VoiceCore.Brain.HTTPLLM
+    "external" -> VoiceCore.Brain.External
+    "mcp" -> VoiceCore.Brain.External
     _ -> VoiceCore.Brain.Static
   end
 

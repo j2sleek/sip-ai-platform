@@ -8,6 +8,41 @@ This guide shows how to integrate OpenCode (as the AI brain) with the telephony 
 - **Body**: Telephony MCP server (`apps/telephony_mcp`) that connects to Control API
 - **Voice Stack**: Control API + Python services (STT/TTS/VAD/LLM) + optional Asterisk for SIP
 
+## Is OpenCode integrated? How does OpenCode answer a call?
+
+Yes — the integration is the telephony MCP server wired into OpenCode via the
+repo [`opencode.json`](../opencode.json). In an OpenCode session the telephony
+tools (`originate_call`, `wait_for_input`, `speak`, `hangup`, …) are available.
+
+There are two ways a call gets answered, and they must not both run at once
+(otherwise both the local model **and** OpenCode speak):
+
+| `VOICE_BRAIN` | Who decides what to say | Use for |
+|---|---|---|
+| `llm` (default) | the body's local `llm` service | fast, unattended calls |
+| `external` | **OpenCode**, via `speak` over MCP | OpenCode-driven conversations |
+| `static` | canned replies | offline tests/demos |
+
+**To get an OpenCode response, run the body in `external` mode** (it transcribes
+and reports the caller, but never speaks on its own) and drive the call from
+OpenCode:
+
+```bash
+VOICE_BRAIN=external CONTROL_API_ENABLED=true bash start_production.sh
+```
+
+Then, in OpenCode, the loop is:
+
+1. `originate_call` (optionally with `greeting`) → returns a `call_id`.
+2. Repeatedly `wait_for_input` (returns the caller's `utterance` and a `cursor`
+   — pass the cursor back as `after_seq`), then `speak` your reply.
+3. `hangup` when the call is over (or when `call_ended` is true).
+
+In `external` mode the body still performs STT and reporting; OpenCode owns the
+content. Latency per turn is therefore higher than `VOICE_BRAIN=llm` (OpenCode
+reasoning time replaces the local LLM call) and there is no local fallback if
+OpenCode is not attached.
+
 ## Step 1: Start All Services
 
 ### Option A: Using start_all.sh
@@ -216,6 +251,10 @@ Expected: Natural conversation between caller and agent, transcript returned suc
 | Rate limits with cloud providers | Switch model (e.g., `qwen/qwen3-14b:free` on OpenRouter), or use mock for testing |
 | Linphone can't register | Verify SIP credentials, Asterisk config, firewall/network |
 | No audio in real SIP | Check Asterisk ARI config, RTP ports, network routing |
+| Agent **and** OpenCode both talk | Turn off the local brain: `VOICE_BRAIN=external` (see above) |
+| OpenCode `speak` works but the local agent also replies | Same: the body is still running `VOICE_BRAIN=llm` |
+| Call goes silent after a few turns / drops | Fixed in ADR-0015 (timer-state corruption + turn sequencing); update and restart the stack |
+| Replies get longer and slower each turn | Fixed in ADR-0015 (reply clamped to `AGENT_MAX_REPLY_CHARS`, lower `LLM_MAX_TOKENS`) |
 
 ## Notes
 

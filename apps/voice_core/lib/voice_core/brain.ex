@@ -8,12 +8,15 @@ defmodule VoiceCore.Brain do
   Implementations (see ADR-0010):
 
     * `VoiceCore.Brain.Static` — canned/echo replies (tests, demo, safe default)
-    * `VoiceCore.Brain.HTTPLLM` — calls the platform `llm` service (Ollama
-      behind a provider interface); the future `MCPBrain` will forward the
-      utterance to a coding agent over the telephony MCP server.
+    * `VoiceCore.Brain.HTTPLLM` — calls the platform `llm` service behind a
+      provider interface; drives turn-taking entirely inside the body.
+    * `VoiceCore.Brain.External` — no local reply: the utterance is reported to
+      `control_api` and the brain is OpenCode over the telephony MCP server,
+      which replies by posting `agent.speak` (delivered by `ControlBus`).
 
   All implementations must respect a timeout and never raise across the
-  boundary — failures become a structured `{:error, reason}`.
+  boundary — failures become a structured `{:error, reason}`. Returning
+  `{:ok, ""}` means "nothing to say locally" (see `External`).
   """
 
   @type transcript :: binary()
