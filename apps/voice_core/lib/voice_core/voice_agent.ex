@@ -25,6 +25,10 @@ defmodule VoiceCore.VoiceAgent do
   # Fallback filler phrases (Layer 2) when none are configured.
   @default_filler_texts ["Let me check on that.", "One moment.", "Let me take a look."]
 
+  # Spoken once when a *deferred* (bridged) turn gets no answer within
+  # `reply_timeout_ms` — e.g. OpenCode is rate-limited or otherwise unavailable.
+  @default_reply_timeout_text "The project agent is unavailable until tomorrow."
+
   # ─── API ────────────────────────────────────────────────────────────────────
 
   @spec start_link(map()) :: GenServer.on_start()
@@ -69,6 +73,19 @@ defmodule VoiceCore.VoiceAgent do
         )
     }
 
+    # Layer 2 safety net: if a deferred (bridged) turn still has no answer after
+    # `reply_timeout_ms`, speak `reply_timeout_text` so the caller is never left
+    # in silence (e.g. OpenCode is rate-limited or down).
+    reply_timeout_ms =
+      Map.get(args, :reply_timeout_ms, Map.get(agent_cfg, :reply_timeout_ms, 8_000))
+
+    reply_timeout_text =
+      Map.get(
+        args,
+        :reply_timeout_text,
+        Map.get(agent_cfg, :reply_timeout_text, @default_reply_timeout_text)
+      )
+
     state = %{
       call_id: call_id,
       media_session: Map.fetch!(args, :media_session),
@@ -93,6 +110,10 @@ defmodule VoiceCore.VoiceAgent do
       filler: filler,
       filler_index: 0,
       filler_timer: nil,
+      # Layer 2 safety-net state (a deferred turn with no bridge answer).
+      reply_timeout_ms: reply_timeout_ms,
+      reply_timeout_text: reply_timeout_text,
+      reply_timer: nil,
       # Hard cap on spoken reply length (characters). Bounds TTS synthesis +
       # playback time, which is the dominant per-turn latency for cloud TTS.
       max_reply_chars: max_reply_chars,
@@ -131,11 +152,6 @@ defmodule VoiceCore.VoiceAgent do
     {:noreply, %{state | bridge: status}}
   end
 
-  # The brain deferred (empty reply) and no bridge speech has arrived yet: speak
-  # a short local filler so the caller does not sit in silence while the external
-  # brain (OpenCode) composes its answer. Cancelled the instant real speech
-  # arrives (`{:speak, ...}`/barge-in), or if a newer turn supersedes this one,
-  # so it never collides with the bridge.
   def handle_info({:filler, turn}, state) do
     if turn == state.turn_seq do
       {text, state} = next_filler(state)
@@ -143,6 +159,29 @@ defmodule VoiceCore.VoiceAgent do
       {:noreply, start_speaking(text, %{state | filler_timer: nil})}
     else
       {:noreply, %{state | filler_timer: nil}}
+    end
+  end
+
+  # Safety net: the brain deferred (a bridged/OpenCode call) and the bridge still
+  # has not spoken within `reply_timeout_ms` — speak the configured line so the
+  # caller is never left in silence (e.g. OpenCode is rate-limited or down). Real
+  # speech arriving first cancels this; a newer turn supersedes it.
+  def handle_info({:reply_timeout, turn}, state) do
+    cond do
+      turn != state.turn_seq ->
+        {:noreply, %{state | reply_timer: nil}}
+
+      state.mode == :listening ->
+        # The caller is mid-utterance; their fresh turn supersedes this one.
+        {:noreply, %{state | reply_timer: nil}}
+
+      true ->
+        Logger.info(
+          "VoiceAgent #{state.call_id}: bridge silent — speaking unavailable fallback",
+          call_id: state.call_id
+        )
+
+        {:noreply, start_speaking(state.reply_timeout_text, %{state | reply_timer: nil})}
     end
   end
 
@@ -170,8 +209,11 @@ defmodule VoiceCore.VoiceAgent do
         # Empty reply: an external/MCP brain defers to the bridge; nothing to say
         # locally. Only stand down if we are still the active (processing) turn —
         # a bridge `speak` may already have moved us to :speaking. Schedule a
-        # filler so the caller hears *something* if OpenCode is slow to reply.
-        {:noreply, schedule_filler(turn, idle_if_processing(state))}
+        # filler so the caller hears *something* if OpenCode is slow to reply, and
+        # a longer safety net for when OpenCode never replies at all.
+        state = idle_if_processing(state)
+        state = schedule_filler(turn, state)
+        {:noreply, schedule_reply_timeout(turn, state)}
       else
         {:noreply, start_speaking(text, state)}
       end
@@ -263,6 +305,7 @@ defmodule VoiceCore.VoiceAgent do
     cancel_timer(state.processing_timer)
     cancel_timer(state.playback_timer)
     cancel_timer(state.filler_timer)
+    cancel_timer(state.reply_timer)
     Logger.info("VoiceAgent #{state.call_id}: terminating")
     :ok
   end
@@ -272,8 +315,10 @@ defmodule VoiceCore.VoiceAgent do
   defp handle_turn_event(:none, _pcm, state), do: {:noreply, state}
 
   defp handle_turn_event(:speech_start, _pcm, state) do
-    # The caller started talking: a pending filler is no longer needed.
+    # The caller started talking: a pending filler / safety-net timer is no
+    # longer needed (their fresh turn will supersede this one).
     state = cancel_filler(state)
+    state = cancel_reply_timeout(state)
 
     case state.mode do
       :speaking ->
@@ -315,8 +360,10 @@ defmodule VoiceCore.VoiceAgent do
     # A previous turn's watchdog may still be pending; replace it so a stale
     # `:processing_timeout` can't flip a later (or speaking) turn to idle.
     cancel_timer(state.processing_timer)
-    # A new turn supersedes any filler queued for the previous (deferred) turn.
+    # A new turn supersedes any filler / safety-net timer queued for the
+    # previous (deferred) turn.
     cancel_timer(state.filler_timer)
+    cancel_timer(state.reply_timer)
 
     turn = state.turn_seq + 1
     agent = self()
@@ -349,7 +396,14 @@ defmodule VoiceCore.VoiceAgent do
 
     timeout = state.stt_timeout_ms + state.llm_timeout_ms + 5_000
     timer = Process.send_after(self(), :processing_timeout, timeout)
-    %{state | processing_timer: timer, turn_seq: state.turn_seq + 1, filler_timer: nil}
+
+    %{
+      state
+      | processing_timer: timer,
+        turn_seq: state.turn_seq + 1,
+        filler_timer: nil,
+        reply_timer: nil
+    }
   end
 
   # Records an agent utterance, reports it to control_api, and synthesizes +
@@ -408,12 +462,14 @@ defmodule VoiceCore.VoiceAgent do
   defp invalidate_turn(state) do
     cancel_timer(state.processing_timer)
     cancel_timer(state.filler_timer)
+    cancel_timer(state.reply_timer)
 
     %{
       state
       | turn_seq: state.turn_seq + 1,
         processing_timer: nil,
-        filler_timer: nil
+        filler_timer: nil,
+        reply_timer: nil
     }
   end
 
@@ -421,6 +477,12 @@ defmodule VoiceCore.VoiceAgent do
   defp cancel_filler(state) do
     cancel_timer(state.filler_timer)
     %{state | filler_timer: nil}
+  end
+
+  # Cancel a pending safety-net timer (real speech arrived, or the caller spoke).
+  defp cancel_reply_timeout(state) do
+    cancel_timer(state.reply_timer)
+    %{state | reply_timer: nil}
   end
 
   # Queue a filler for a deferred turn — unless filler is disabled/empty or the
@@ -435,6 +497,19 @@ defmodule VoiceCore.VoiceAgent do
   end
 
   defp schedule_filler(_turn, state), do: state
+
+  # Queue the safety net for a deferred turn — unless there is no bridge
+  # (`:absent`), the text is empty, or the budget is disabled. Like the filler,
+  # it is cancelled the moment real speech arrives or a newer turn supersedes it.
+  defp schedule_reply_timeout(_turn, %{bridge: :absent} = state), do: state
+
+  defp schedule_reply_timeout(turn, %{reply_timeout_ms: ms, reply_timeout_text: text} = state)
+       when is_integer(ms) and ms > 0 and is_binary(text) and text != "" do
+    timer = Process.send_after(self(), {:reply_timeout, turn}, ms)
+    %{state | reply_timer: timer}
+  end
+
+  defp schedule_reply_timeout(_turn, state), do: state
 
   defp next_filler(%{filler: %{texts: []}} = state), do: {"", state}
 

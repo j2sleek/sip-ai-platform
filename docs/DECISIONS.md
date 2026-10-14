@@ -715,3 +715,42 @@ local greeting and then silence — the same contract as `VOICE_BRAIN=external`
 `VOICE_BRAIN=llm` if unattended dial-ins must always be answered locally. No
 SIP/Asterisk control logic moves into the brain; media stays behind
 `MediaTransport`; the brain/body split is intact (AGENTS.md rules 1–5).
+
+## ADR-0019 — No-reply safety net for bridged turns
+
+**Status:** Accepted (OpenCode-integration follow-up)
+
+**Context:** ADR-0017's filler masks the *first* second of an OpenCode turn, but
+it is a single phrase: if OpenCode never answers at all — because it is
+rate-limited, its session died, or the MCP loop stopped — the caller hears
+"Let me check on that." and then silence indefinitely. A rate-limited OpenCode
+also cannot reliably `speak` a message itself, since a model that is
+rate-limited often cannot emit the tool call. So the *body* must have a bounded
+"the brain never answered" behaviour.
+
+**Decision:** Add a second, longer Layer-2 timer to `VoiceCore.VoiceAgent`.
+When the brain defers (empty reply — a bridged/OpenCode turn), the agent now
+schedules, in addition to the ~900 ms filler, a **reply timeout**:
+
+* `AGENT_REPLY_TIMEOUT_MS` (default `8000`) after the turn, if no real speech
+  has arrived from the bridge, the agent speaks `AGENT_REPLY_TIMEOUT_TEXT`
+  (default "The project agent is unavailable until tomorrow.").
+* It is **not** a fixed one-shot: like the filler it is cancelled the moment
+  real speech arrives (`{:speak, …}` from OpenCode), when the caller starts
+  talking, when a newer turn supersedes it, or on hangup — so a slow-but-alive
+  OpenCode still wins, and the fallback only fires when the bridge is truly
+  silent. It is skipped for `:absent` calls (no bridge → nothing to wait for).
+* When OpenCode *is* alive and can react to a rate limit, it should `speak` the
+  same line itself (standard `speak` over MCP); the safety net is the backstop
+  for when even that is impossible.
+
+**Consequences:** A bridged call can no longer hang in silence: the caller gets
+the filler at ~1 s and a definitive "agent unavailable" line at
+`AGENT_REPLY_TIMEOUT_MS` if OpenCode does not reply. Cost is one extra timer per
+turn and one short TTS clip on failure; no model tokens. The message and budget
+are environment-tunable, so a slow deployment can raise the timeout (or blank
+the text to disable the fallback). Layering is unchanged: the body still only
+*waits* for the brain; it never decides content (AGENTS.md rules 1–5). Known
+limit: the fallback is per-turn — if the caller keeps talking to an unavailable
+agent, each turn gets its own filler + fallback, which is intended (the caller is
+told, not silently ignored).

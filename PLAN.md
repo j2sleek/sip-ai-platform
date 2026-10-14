@@ -356,7 +356,7 @@ now implemented. The decision is recorded as **ADR-0010** in
 | Phase 3 (ARI) | `voice_core` ARI connection + channel/turn wiring (config-gated) |
 | Phase 4 (media) | AudioSocket adapter behind `MediaTransport`; event-driven server |
 | Phase 5 (AI svcs) | `stt`/`llm`/`tts`/`vad` HTTP services, stdlib-only, provider interfaces (mock default; whisper.cpp/Ollama/Piper opt-in) |
-| Phase 6 (agent) | `VoiceCore.VoiceAgent` (body) + `VoiceCore.Brain` interface (`Static`, `HTTPLLM`, `External`, `Auto`) with `respond/3`; per-turn sequencing, safe timer cancellation, bounded replies (ADR-0015); OpenCode-external brain mode (ADR-0016); direction-aware brain + latency filler (ADR-0017); inbound-call bridge registration + delegation (ADR-0018) |
+| Phase 6 (agent) | `VoiceCore.VoiceAgent` (body) + `VoiceCore.Brain` interface (`Static`, `HTTPLLM`, `External`, `Auto`) with `respond/3`; per-turn sequencing, safe timer cancellation, bounded replies (ADR-0015); OpenCode-external brain mode (ADR-0016); direction-aware brain + latency filler (ADR-0017); inbound-call bridge registration + delegation (ADR-0018); no-reply safety net / unavailable fallback (ADR-0019) |
 | Phase 7 (barge-in) | Endpointing + turn state machine + barge-in detection in `VoiceAgent.Turn` (TTS-cancel wiring is the remaining piece) |
 | Phase 9 (outbound) | `control_api` outbound-call API with `simulated` + `ari` backends; per-call event log + long-poll |
 | MCP brain | `telephony_mcp` MCP stdio server + `demo-voice-loop.mjs` end-to-end demo |
@@ -388,6 +388,11 @@ node apps/telephony_mcp/scripts/demo-voice-loop.mjs
   `CallRecord.direction` (`inbound`/`outbound`) is surfaced by `GET /calls`; an
   inbound call with no OpenCode session watching gets the local greeting then
   silence — use `VOICE_BRAIN=llm` for unattended dial-ins.
+- ADR-0019: no-reply safety net — a bridged turn still unanswered after
+  `AGENT_REPLY_TIMEOUT_MS` (default 8000) speaks `AGENT_REPLY_TIMEOUT_TEXT`
+  (default "The project agent is unavailable until tomorrow.") so a caller is
+  never left in silence when OpenCode is down/rate-limited; cancelled the moment
+  real speech arrives.
 
 **Still open**
 

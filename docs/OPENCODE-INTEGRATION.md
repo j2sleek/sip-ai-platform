@@ -70,6 +70,19 @@ reasoning time replaces the local LLM call) and there is no local fallback if
 OpenCode is not attached. In `auto` mode this latency is masked by the filler for
 any bridged call, inbound included.
 
+**If OpenCode never answers (ADR-0019).** The filler only covers the first
+second. If a bridged turn is still unanswered after `AGENT_REPLY_TIMEOUT_MS`
+(default `8000`), the body speaks `AGENT_REPLY_TIMEOUT_TEXT` (default "The
+project agent is unavailable until tomorrow.") so the caller is never left in
+silence — e.g. the OpenCode session died, the MCP loop stopped, or OpenCode is
+**rate-limited**. Real speech arriving first cancels the fallback, so an
+alive-but-slow OpenCode still wins. Because a rate-limited model often cannot
+emit *any* tool call, this timed fallback is the reliable carrier of the
+"unavailable" message; when OpenCode *is* still able to act after a rate-limit
+error it should `speak` that same line itself. Tune the budget with
+`AGENT_REPLY_TIMEOUT_MS` (raise it for a slow deployment) or blank
+`AGENT_REPLY_TIMEOUT_TEXT` to disable the fallback.
+
 ## Step 1: Start All Services
 
 ### Option A: Using start_all.sh

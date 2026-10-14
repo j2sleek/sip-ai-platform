@@ -110,7 +110,16 @@ config :voice_core, :agent,
   # OpenCode composes its answer.
   filler_enabled: System.get_env("AGENT_FILLER_ENABLED", "true") == "true",
   filler_delay_ms: int_env.("AGENT_FILLER_DELAY_MS", 900),
-  filler_texts: filler_texts
+  filler_texts: filler_texts,
+  # Safety net (ADR-0019): if a deferred (bridged/OpenCode) turn still has no
+  # answer after `reply_timeout_ms`, speak `reply_timeout_text` so the caller is
+  # never left in silence — e.g. OpenCode is rate-limited or down.
+  reply_timeout_ms: int_env.("AGENT_REPLY_TIMEOUT_MS", 8_000),
+  reply_timeout_text:
+    System.get_env(
+      "AGENT_REPLY_TIMEOUT_TEXT",
+      "The project agent is unavailable until tomorrow."
+    )
 
 # ─── Brain selection ────────────────────────────────────────────────────────
 # "llm"      → VoiceCore.Brain.HTTPLLM (calls the platform `llm` service; drives

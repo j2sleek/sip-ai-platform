@@ -21,6 +21,7 @@
 #   PORT HOST ARI_USERNAME ARI_APP ARI_BASE_URL
 #   VOICE_BRAIN CONTROL_API_ENABLED CONTROL_API_URL AGENT_GREETING
 #   AGENT_MAX_REPLY_CHARS VAD_SILENCE_MS  (turn-taking / latency tuning)
+#   AGENT_FILLER_ENABLED AGENT_FILLER_DELAY_MS AGENT_REPLY_TIMEOUT_MS AGENT_REPLY_TIMEOUT_TEXT
 #   HTTP_KEEPALIVE HTTP_MAX_IDLE  (AI-service outbound connection reuse; ADR-0014)
 #
 set -euo pipefail
@@ -87,9 +88,14 @@ export AGENT_GREETING="${AGENT_GREETING:-Hello, this is the AI assistant. How ca
 export AGENT_MAX_REPLY_CHARS="${AGENT_MAX_REPLY_CHARS:-320}"
 # Latency filler (Layer 2, ADR-0017): on a bridged call the body speaks a short
 # local phrase after this delay unless real speech arrives first, so the caller
-# is never left in silence while OpenCode composes its reply.
+# hears acknowledgment while OpenCode thinks.
 export AGENT_FILLER_ENABLED="${AGENT_FILLER_ENABLED:-true}"
 export AGENT_FILLER_DELAY_MS="${AGENT_FILLER_DELAY_MS:-900}"
+# No-reply safety net (Layer 2, ADR-0019): if a bridged turn still has no answer
+# from OpenCode after this budget (e.g. it is rate-limited or down), speak this
+# line so the caller is not left in silence.
+export AGENT_REPLY_TIMEOUT_MS="${AGENT_REPLY_TIMEOUT_MS:-8000}"
+export AGENT_REPLY_TIMEOUT_TEXT="${AGENT_REPLY_TIMEOUT_TEXT:-The project agent is unavailable until tomorrow.}"
 # Lower the LLM output budget for voice: long, essay-like replies are the main
 # cause of growing per-turn latency. Raise if replies get cut off.
 export LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-320}"

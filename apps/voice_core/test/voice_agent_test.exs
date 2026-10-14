@@ -341,4 +341,70 @@ defmodule VoiceCore.VoiceAgentTest do
              &(&1.role == :agent and &1.text == "Let me check on that.")
            )
   end
+
+  test "a deferred turn speaks the unavailable fallback when the bridge never answers" do
+    {:ok, media} = FakeMedia.start_link([])
+
+    {:ok, agent} =
+      VoiceAgent.start_link(%{
+        call_id: "agent-fallback-#{System.unique_integer([:positive, :monotonic])}",
+        media_session: media,
+        ai: FakeAI,
+        brain: SilentBrain,
+        # Isolate the safety net from the filler.
+        filler_enabled: false,
+        reply_timeout_ms: 50,
+        reply_timeout_text: "The project agent is unavailable until tomorrow."
+      })
+
+    send(agent, {:bridge, :attached})
+
+    for _ <- 1..3, do: send(agent, {:audio, frame(1000)})
+    for _ <- 1..8, do: send(agent, {:audio, frame(0)})
+
+    await(
+      fn ->
+        Enum.any?(
+          VoiceAgent.transcript(agent),
+          &(&1.role == :agent and &1.text =~ "unavailable")
+        )
+      end,
+      2_000
+    )
+
+    assert FakeMedia.sent(media) != []
+  end
+
+  test "a bridge reply cancels the pending unavailable fallback" do
+    {:ok, media} = FakeMedia.start_link([])
+
+    {:ok, agent} =
+      VoiceAgent.start_link(%{
+        call_id: "agent-fallback-cancel-#{System.unique_integer([:positive, :monotonic])}",
+        media_session: media,
+        ai: FakeAI,
+        brain: SilentBrain,
+        filler_enabled: false,
+        reply_timeout_ms: 500,
+        reply_timeout_text: "The project agent is unavailable until tomorrow."
+      })
+
+    send(agent, {:bridge, :attached})
+
+    for _ <- 1..3, do: send(agent, {:audio, frame(1000)})
+    for _ <- 1..8, do: send(agent, {:audio, frame(0)})
+
+    # The caller turn is recorded (the brain deferred)...
+    await(fn -> length(VoiceAgent.transcript(agent)) == 1 end)
+
+    # ...and the bridge answers well before the 500 ms safety net.
+    send(agent, {:speak, "Here is the real answer."})
+    await(fn -> VoiceAgent.mode(agent) == :speaking end)
+
+    Process.sleep(700)
+
+    texts = Enum.map(VoiceAgent.transcript(agent), & &1.text)
+    assert "Here is the real answer." in texts
+    refute Enum.any?(texts, &(&1 =~ "unavailable"))
+  end
 end
