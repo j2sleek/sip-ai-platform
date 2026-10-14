@@ -14,15 +14,20 @@ defmodule VoiceCore.VoiceAgentTest do
     use GenServer
     def start_link(_), do: GenServer.start_link(__MODULE__, [])
     def sent(pid), do: GenServer.call(pid, :sent)
+    def flushes(pid), do: GenServer.call(pid, :flushes)
 
     @impl true
-    def init(_), do: {:ok, []}
+    def init(_), do: {:ok, %{sent: [], flushes: 0}}
 
     @impl true
-    def handle_call({:send_audio, pcm}, _from, acc), do: {:reply, :ok, [pcm | acc]}
+    def handle_call({:send_audio, pcm}, _from, acc),
+      do: {:reply, :ok, %{acc | sent: [pcm | acc.sent]}}
+
     def handle_call({:attach_transport, _conn_id}, _from, acc), do: {:reply, :ok, acc}
-    def handle_call(:sent, _from, acc), do: {:reply, Enum.reverse(acc), acc}
-    def handle_call(:stats, _from, acc), do: {:reply, %{chunks: length(acc)}, acc}
+    def handle_call(:flush, _from, acc), do: {:reply, :ok, %{acc | flushes: acc.flushes + 1}}
+    def handle_call(:sent, _from, acc), do: {:reply, Enum.reverse(acc.sent), acc}
+    def handle_call(:flushes, _from, acc), do: {:reply, acc.flushes, acc}
+    def handle_call(:stats, _from, acc), do: {:reply, %{chunks: length(acc.sent)}, acc}
   end
 
   defmodule FakeAI do
@@ -91,8 +96,8 @@ defmodule VoiceCore.VoiceAgentTest do
   test "an endpointed utterance flows through STT → brain → TTS playback" do
     {agent, media} = start_agent()
 
-    # Speech, then enough trailing silence to endpoint the utterance.
-    send(agent, {:audio, frame(1000)})
+    # Speech (>= min_speech_ms), then enough trailing silence to endpoint.
+    for _ <- 1..3, do: send(agent, {:audio, frame(1000)})
     for _ <- 1..8, do: send(agent, {:audio, frame(0)})
 
     await(fn -> VoiceAgent.mode(agent) == :idle and FakeMedia.sent(media) != [] end)
@@ -121,6 +126,7 @@ defmodule VoiceCore.VoiceAgentTest do
       })
 
     send(agent, {:audio, frame(1000)})
+    send(agent, {:audio, frame(1000)})
     for _ <- 1..8, do: send(agent, {:audio, frame(0)})
 
     # STT succeeds (a user turn is recorded), the brain fails, and the agent
@@ -130,5 +136,23 @@ defmodule VoiceCore.VoiceAgentTest do
     end)
 
     assert FakeMedia.sent(media) == []
+  end
+
+  test "barge-in during playback flushes queued audio and returns to listening" do
+    {agent, media} = start_agent()
+
+    # Drive a full turn so the agent enters :speaking.
+    send(agent, {:audio, frame(1000)})
+    send(agent, {:audio, frame(1000)})
+    for _ <- 1..8, do: send(agent, {:audio, frame(0)})
+    await(fn -> VoiceAgent.mode(agent) == :speaking end)
+
+    before = FakeMedia.flushes(media)
+
+    # Caller talks over the agent: a barge-in must flush queued playback.
+    send(agent, {:audio, frame(2000)})
+    await(fn -> VoiceAgent.mode(agent) == :listening end)
+
+    assert FakeMedia.flushes(media) > before
   end
 end

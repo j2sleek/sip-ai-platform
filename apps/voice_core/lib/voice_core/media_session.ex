@@ -45,6 +45,17 @@ defmodule VoiceCore.MediaSession do
     GenServer.call(pid_or_name, {:send_audio, pcm}, 10_000)
   end
 
+  @doc """
+  Drops any queued (not yet paced) outbound PCM immediately.
+
+  Used on barge-in so the agent stops speaking within one 20 ms frame instead of
+  draining whatever was still buffered.
+  """
+  @spec flush(GenServer.server()) :: :ok
+  def flush(pid_or_name) do
+    GenServer.call(pid_or_name, :flush, 5_000)
+  end
+
   @doc "Session media statistics."
   @spec stats(GenServer.server()) :: map()
   def stats(pid_or_name) do
@@ -81,7 +92,9 @@ defmodule VoiceCore.MediaSession do
       # Pending outbound PCM (internal big-endian). Drained at real time by the
       # 20 ms `:tx_tick`; silence is emitted whenever it runs dry.
       tx_queue: <<>>,
-      tx_timer: nil
+      tx_timer: nil,
+      # Absolute due time (monotonic ms) of the next frame — see advance_schedule/2.
+      tx_next_at: nil
     }
 
     {:ok, state}
@@ -115,6 +128,10 @@ defmodule VoiceCore.MediaSession do
 
   def handle_call(:stats, _from, state) do
     {:reply, session_stats(state), state}
+  end
+
+  def handle_call(:flush, _from, state) do
+    {:reply, :ok, %{state | tx_queue: <<>>}}
   end
 
   @impl true
@@ -199,10 +216,18 @@ defmodule VoiceCore.MediaSession do
         )
     end
 
-    timer = Process.send_after(self(), :tx_tick, @tx_tick_ms)
+    now = System.monotonic_time(:millisecond)
+    next_at = advance_schedule(state.tx_next_at, now)
+    timer = Process.send_after(self(), :tx_tick, max(next_at - now, 0))
 
     {:noreply,
-     %{state | tx_queue: rest, tx_timer: timer, audio_frames_tx: state.audio_frames_tx + 1}}
+     %{
+       state
+       | tx_queue: rest,
+         tx_timer: timer,
+         tx_next_at: next_at,
+         audio_frames_tx: state.audio_frames_tx + 1
+     }}
   end
 
   def handle_info(:media_disconnected, state) do
@@ -241,10 +266,32 @@ defmodule VoiceCore.MediaSession do
 
   # Starts the real-time outbound ticker once (idempotent).
   defp start_tx(%{tx_timer: nil} = state) do
-    %{state | tx_timer: Process.send_after(self(), :tx_tick, @tx_tick_ms)}
+    now = System.monotonic_time(:millisecond)
+
+    %{
+      state
+      | tx_timer: Process.send_after(self(), :tx_tick, @tx_tick_ms),
+        tx_next_at: now + @tx_tick_ms
+    }
   end
 
   defp start_tx(state), do: state
+
+  # Absolute outbound schedule: each frame is due one period after the previous
+  # *due* time, not one period after the handler runs. Relative `send_after`
+  # accumulates each tick's processing time (+ the synchronous transport send),
+  # streaming steadily slower than real time — measured as a ~0.92 RTP clock
+  # ratio on a real Linphone call, which grows the client's adaptive jitter
+  # buffer to ~145 ms and costs clarity.
+  defp advance_schedule(nil, now), do: now + @tx_tick_ms
+
+  defp advance_schedule(due, now) do
+    next = due + @tx_tick_ms
+
+    # If a long stall put us more than ~5 periods behind, resync rather than
+    # bursting a backlog of frames to catch up.
+    if next < now - @tx_tick_ms * 5, do: now + @tx_tick_ms, else: next
+  end
 
   defp cancel_tx(nil), do: nil
   defp cancel_tx(ref), do: Process.cancel_timer(ref) && nil

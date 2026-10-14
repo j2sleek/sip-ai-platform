@@ -162,7 +162,9 @@ export class AriBackend implements CallBackend {
         channelId,
         endpoint,
         app: this.config.app,
-        callerId: request.from,
+        // Present a real caller ID; ARI otherwise leaves the channel caller ID
+        // empty, so the callee's phone shows "Anonymous" <sip:1001@asterisk>.
+        callerId: request.from ?? this.config.callerId,
       });
     } catch (err) {
       this.registry.append(id, "call.failed", { reason: (err as Error).message });

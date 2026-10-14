@@ -105,3 +105,50 @@ curl -X POST http://127.0.0.1:4001/api/v1/calls \
   placeholder — change it before exposing the host.
 - Cloud AI providers are optional; the `mock` providers give deterministic
   behavior for local testing.
+
+## Troubleshooting
+
+### The callee sees "Anonymous" instead of a caller ID
+
+Asterisk's outbound `From` is built from the PJSIP endpoint's identity. Two
+things matter:
+
+- **Do not set `from_user` on the endpoint.** PJSIP's `from_user` *overrides*
+  the caller ID, producing `From: "Anonymous" <sip:1001@asterisk>` (or no
+  display name at all). Leave it unset.
+- **Set the endpoint `callerid`**, e.g.
+  `callerid=AI Assistant <2000>` in `[1001]`. That becomes
+  `From: "AI Assistant" <sip:2000@asterisk>`.
+- Per call, `control_api` also sends an ARI `callerId` (default
+  `ARI_CALLER_ID`, e.g. `"AI Assistant" <2000>`); a request `from` overrides
+  it. This only takes effect when `from_user` is unset.
+
+Verify without audio with the ARI interface:
+
+```bash
+PW=$(cat infra/asterisk/.ari_password)
+curl -u "voice_core:$PW" -X POST \
+  "http://127.0.0.1:8088/ari/channels?channelId=probe&endpoint=PJSIP%2F1001&app=probe&callerId=%22AI%20Assistant%22%20%3C2000%3E&timeout=30"
+```
+
+The client's softphone log shows the `From` it received.
+
+### Call clarity is limited / audio sounds robotic
+
+- Asterisk is configured for **G.711 (ulaw/alaw) at 8 kHz** — narrowband
+  "telephone quality" is the ceiling. For wideband audio, add `g722`/`opus` on
+  both the endpoint and the client, but note the AudioSocket core is 8 kHz.
+- On the Linphone side, turn the call off **speakerphone** (echo + room noise),
+  and **disable call recording** (`.mkv`/Opus encoding adds CPU load and can
+  cause glitches).
+- The server resamples TTS (24 kHz WAV) to 8 kHz with an anti-aliased
+  windowed-sinc filter, so high-frequency fold-back is not a source of harshness.
+
+### Turns feel delayed
+
+SIP/RTP between Linphone and Asterisk is local (sub-ms), so the client is not
+the latency source once media is set up. The dominant per-turn latency is the
+cloud AI round-trip (STT → LLM → TTS) over the host's uplink. Confirm end-to-end
+latency with `run/stt.log`, `run/llm.log`, `run/tts.log` (each line has
+`elapsed_ms`).
+

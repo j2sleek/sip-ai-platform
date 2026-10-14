@@ -25,6 +25,7 @@ from tts.provider import (  # noqa: E402
     get_provider,
     pcm_le_to_be,
     pcm_s16be,
+    resample_pcm,
 )
 from tts.server import make_server  # noqa: E402
 
@@ -58,6 +59,48 @@ class TestPcmEncoding(unittest.TestCase):
 
     def test_le_to_be_drops_odd_trailing_byte(self):
         self.assertEqual(pcm_le_to_be(b"\x01\x00\xff"), b"\x00\x01")
+
+
+class TestResampler(unittest.TestCase):
+    @staticmethod
+    def _tone(freq, rate, secs=1.0, amp=8000):
+        import array
+        import math
+
+        n = int(rate * secs)
+        return array.array(
+            "h", [int(amp * math.sin(2 * math.pi * freq * i / rate)) for i in range(n)]
+        )
+
+    @staticmethod
+    def _rms(samples):
+        import math
+
+        if not len(samples):
+            return 0.0
+        return math.sqrt(sum(float(x) * x for x in samples) / len(samples))
+
+    def test_downsample_preserves_duration(self):
+        src = self._tone(1000, 24000, secs=1.0)
+        out = resample_pcm(src, 24000, 8000)
+        self.assertEqual(len(out), 8000)
+
+    def test_downsample_preserves_in_band_tone(self):
+        src = self._tone(1000, 24000, secs=1.0)
+        out = resample_pcm(src, 24000, 8000)
+        self.assertAlmostEqual(self._rms(out) / self._rms(src), 1.0, delta=0.05)
+
+    def test_downsample_rejects_aliasing_above_nyquist(self):
+        # A 6 kHz tone cannot be represented at 8 kHz; without an anti-alias
+        # filter it folds back into the audible band. It must be suppressed.
+        src = self._tone(6000, 24000, secs=1.0)
+        out = resample_pcm(src, 24000, 8000)
+        self.assertLess(self._rms(out) / self._rms(src), 0.05)
+
+    def test_non_integer_ratio_returns_expected_count(self):
+        src = self._tone(1000, 22050, secs=1.0)
+        out = resample_pcm(src, 22050, 8000)
+        self.assertEqual(len(out), 8000)
 
 
 class TestProviders(unittest.TestCase):

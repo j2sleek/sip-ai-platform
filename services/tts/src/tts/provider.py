@@ -121,10 +121,104 @@ def decode_wav_mono(data: bytes) -> tuple[array.array, int]:
     return samples, rate
 
 
-def resample_pcm(samples: array.array, src_rate: int, dst_rate: int) -> array.array:
-    """Linear-interpolates 16-bit PCM from ``src_rate`` to ``dst_rate``."""
+def _lowpass_kernel(cutoff_norm: float, taps: int) -> "list[float]":
+    """Windowed-sinc (Blackman) low-pass kernel, ``2*taps+1`` taps.
+
+    ``cutoff_norm`` is the cutoff in cycles/sample (0..0.5).
+    """
+    kernel = []
+    for k in range(-taps, taps + 1):
+        if k == 0:
+            s = 2.0 * cutoff_norm
+        else:
+            s = math.sin(2.0 * math.pi * cutoff_norm * k) / (math.pi * k)
+        u = k / taps
+        w = 0.42 + 0.5 * math.cos(math.pi * u) + 0.08 * math.cos(2.0 * math.pi * u)
+        kernel.append(s * w)
+    return kernel
+
+
+def _lowpass_fir(samples: array.array, cutoff_norm: float, taps: int = 16) -> array.array:
+    """Anti-alias FIR low-pass. ``cutoff_norm`` is in cycles/sample (0..0.5)."""
+    kernel = _lowpass_kernel(cutoff_norm, taps)
+    n = len(samples)
+    out = array.array("h", [0] * n)
+    width = len(kernel)
+
+    # Interior: no bounds checks.
+    for i in range(taps, n - taps):
+        acc = 0.0
+        base = i - taps
+        for k in range(width):
+            acc += samples[base + k] * kernel[k]
+        out[i] = _clip(acc)
+
+    # Edges (implicit zero padding).
+    for i in list(range(0, taps)) + list(range(max(taps, n - taps), n)):
+        acc = 0.0
+        for k in range(-taps, taps + 1):
+            j = i + k
+            if 0 <= j < n:
+                acc += samples[j] * kernel[k + taps]
+        out[i] = _clip(acc)
+
+    return out
+
+
+def _lowpass_decimate(
+    samples: array.array, cutoff_norm: float, factor: int, taps: int = 16
+) -> array.array:
+    """Anti-aliased decimation by an integer ``factor``.
+
+    Equivalent to a low-pass followed by taking every ``factor``-th sample, but
+    only the retained outputs are convolved — ``factor``× less work.
+    """
+    kernel = _lowpass_kernel(cutoff_norm, taps)
+    n = len(samples)
+    count = n // factor
+    out = array.array("h", [0] * count)
+
+    for i in range(count):
+        center = i * factor
+        acc = 0.0
+        j0 = center - taps
+        lo = 0 if j0 < 0 else j0
+        hi = n - 1 if center + taps >= n else center + taps
+        k0 = lo - j0
+        for j in range(lo, hi + 1):
+            acc += samples[j] * kernel[k0 + (j - lo)]
+        out[i] = _clip(acc)
+
+    return out
+
+
+def _clip(value: float) -> int:
+    return max(-32768, min(32767, int(round(value))))
+
+
+def resample_pcm(
+    samples: array.array, src_rate: int, dst_rate: int, taps: int = 16
+) -> array.array:
+    """Resamples 16-bit PCM from ``src_rate`` to ``dst_rate``.
+
+    Downsampling applies a windowed-sinc anti-aliasing low-pass before
+    interpolation; a bare linear interpolation would fold energy above the
+    destination Nyquist back into the audible band (harsh/buzzy speech on the
+    8 kHz telephony path when the provider returns 24 kHz audio).
+    """
     if src_rate == dst_rate or not len(samples):
         return samples
+
+    if src_rate > dst_rate:
+        # Keep the passband just under the destination Nyquist.
+        cutoff = 0.5 * (dst_rate / src_rate)
+
+        if src_rate % dst_rate == 0:
+            # Exact integer decimation needs no interpolation.
+            return _lowpass_decimate(samples, cutoff, src_rate // dst_rate, taps)
+
+        samples = _lowpass_fir(samples, cutoff, taps)
+
     ratio = src_rate / dst_rate
     count = int(len(samples) / ratio)
     out = array.array("h", [0] * count)
@@ -134,7 +228,7 @@ def resample_pcm(samples: array.array, src_rate: int, dst_rate: int) -> array.ar
         frac = pos - idx
         a = samples[idx]
         b = samples[idx + 1] if idx + 1 < len(samples) else a
-        out[i] = int(a + (b - a) * frac)
+        out[i] = _clip(a + (b - a) * frac)
     return out
 
 

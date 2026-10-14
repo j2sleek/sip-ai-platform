@@ -41,6 +41,7 @@ export ARI_USERNAME="${ARI_USERNAME:-voice_core}"
 export ARI_APP="${ARI_APP:-voice_core}"
 export ARI_APP_NAME="${ARI_APP_NAME:-$ARI_APP}"
 export ARI_BASE_URL="${ARI_BASE_URL:-http://127.0.0.1:8088}"
+export ARI_CALLER_ID="${ARI_CALLER_ID:-\"AI Assistant\" <2000>}"
 export ARI_ENABLED=true
 export CALL_BACKEND=ari
 

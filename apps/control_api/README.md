@@ -106,6 +106,7 @@ Environment-driven (`src/config.ts`); see `.env.example`.
 | `ARI_USERNAME` / `ARI_PASSWORD` | `voice_core` / *(empty)* | ARI credentials |
 | `ARI_APP` | `voice_core` | Stasis application |
 | `ARI_ENDPOINT_TEMPLATE` | `PJSIP/{to}` | Originate endpoint template |
+| `ARI_CALLER_ID` | `"AI Assistant" <2000>` | Caller ID presented on outbound calls when the request omits `from` |
 | `MAX_EVENT_WAIT_MS` | `30000` | Long-poll upper bound |
 | `MAX_EVENTS_PER_CALL` | `1000` | Retained events per call |
 

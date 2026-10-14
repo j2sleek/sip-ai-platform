@@ -19,6 +19,12 @@ export interface AriConfig {
   timeoutMs: number;
   /** Endpoint template for originate; `{to}` is replaced by the destination. */
   endpointTemplate: string;
+  /**
+   * Caller ID presented on outbound calls when the request omits `from`
+   * (e.g. `"AI Assistant" <2000>`). Without this, ARI defaults the channel
+   * caller ID to "Anonymous", which is what the callee sees.
+   */
+  callerId: string;
 }
 
 export interface Config {
@@ -85,6 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       app: env.ARI_APP ?? "voice_core",
       timeoutMs: parsePositiveInt(env.ARI_TIMEOUT_MS, 10_000),
       endpointTemplate: env.ARI_ENDPOINT_TEMPLATE ?? "PJSIP/{to}",
+      callerId: env.ARI_CALLER_ID ?? '"AI Assistant" <2000>',
     },
     maxEventWaitMs: parsePositiveInt(env.MAX_EVENT_WAIT_MS, 30_000),
     maxEventsPerCall: parsePositiveInt(env.MAX_EVENTS_PER_CALL, 1_000),

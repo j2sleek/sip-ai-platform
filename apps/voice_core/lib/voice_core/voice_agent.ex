@@ -11,17 +11,16 @@ defmodule VoiceCore.VoiceAgent do
   (never blocking the agent's audio path — AGENTS.md rule 14), and every
   external call has a timeout (rule 7).
 
-  Barge-in: while TTS playback is paced at 100 ms/chunk, a `:speech_start`
-  event cancels the queue and the interruption is captured as the next
-  utterance (Phase 7 essence).
+  Barge-in: playback is owned by `VoiceCore.MediaSession` (which paces the
+  queued PCM at real time); a `:speech_start` event flushes that queue so
+  playback stops within one 20 ms frame, and the interruption is captured as the
+  next utterance (Phase 7 essence).
   """
 
   use GenServer
   require Logger
 
   alias VoiceCore.VoiceAgent.Turn
-
-  @speech_frame_ms 100
 
   # ─── API ────────────────────────────────────────────────────────────────────
 
@@ -59,8 +58,11 @@ defmodule VoiceCore.VoiceAgent do
       turn: Turn.new(Map.merge(agent_cfg, %{call_id: call_id})),
       mode: :idle,
       transcript: [],
-      tts_queue: [],
-      tts_timer: nil,
+      # Incremented whenever playback starts or is cancelled; in-flight TTS
+      # results carrying a stale sequence are dropped (a barge-in during
+      # synthesis must not resurrect the cancelled reply).
+      speak_seq: 0,
+      playback_timer: nil,
       processing_timer: nil,
       stt_timeout_ms: Map.get(ai, :stt_timeout_ms, 15_000),
       llm_timeout_ms: Map.get(ai, :llm_timeout_ms, 30_000),
@@ -124,46 +126,49 @@ defmodule VoiceCore.VoiceAgent do
     {:noreply, start_speaking(text, state)}
   end
 
-  def handle_info({:tts_ready, pcm}, state) when byte_size(pcm) > 0 do
-    chunks = chunk_pcm(pcm, 800 * 2)
+  def handle_info({:tts_ready, seq, pcm}, state) when is_binary(pcm) do
+    if seq == state.speak_seq and byte_size(pcm) > 0 do
+      # Hand the whole clip to the media session, which owns real-time pacing
+      # (single clock). If the clip already finished, this is a no-op.
+      case VoiceCore.MediaSession.send_audio(state.media_session, pcm) do
+        :ok ->
+          duration_ms = pcm_duration_ms(pcm, state.turn.sample_rate)
+          timer = Process.send_after(self(), {:playback_done, seq}, duration_ms + 250)
+          {:noreply, %{state | playback_timer: timer}}
 
-    send(self(), :tts_tick)
-    {:noreply, %{state | tts_queue: chunks, tts_timer: nil}}
-  end
-
-  def handle_info({:tts_ready, _empty}, state) do
-    {:noreply, %{state | mode: :idle}}
-  end
-
-  def handle_info({:tts_failed, reason}, state) do
-    Logger.error("VoiceAgent #{state.call_id}: TTS failed #{inspect(reason)}",
-      call_id: state.call_id
-    )
-
-    {:noreply, %{state | mode: :idle}}
-  end
-
-  # Paced playback: one 100 ms PCM chunk per tick.
-  def handle_info(:tts_tick, %{tts_queue: [chunk | rest]} = state) do
-    case VoiceCore.MediaSession.send_audio(state.media_session, chunk) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("VoiceAgent #{state.call_id}: playback send failed #{inspect(reason)}")
-    end
-
-    case rest do
-      [] ->
-        {:noreply, %{state | tts_queue: [], mode: :idle, tts_timer: nil}}
-
-      _ ->
-        timer = Process.send_after(self(), :tts_tick, @speech_frame_ms)
-        {:noreply, %{state | tts_queue: rest, tts_timer: timer}}
+        {:error, reason} ->
+          Logger.warning("VoiceAgent #{state.call_id}: playback send failed #{inspect(reason)}")
+          {:noreply, %{state | mode: :idle}}
+      end
+    else
+      # Stale TTS result (barge-in while synthesizing) — drop it.
+      {:noreply, state}
     end
   end
 
-  def handle_info(:tts_tick, state), do: {:noreply, %{state | tts_queue: [], mode: :idle}}
+  def handle_info({:tts_ready, _seq, _empty}, state), do: {:noreply, %{state | mode: :idle}}
+
+  def handle_info({:tts_failed, seq, reason}, state) do
+    if seq == state.speak_seq do
+      Logger.error("VoiceAgent #{state.call_id}: TTS failed #{inspect(reason)}",
+        call_id: state.call_id
+      )
+
+      {:noreply, %{state | mode: :idle}}
+    else
+      {:noreply, state}
+    end
+  end
+
+  # Estimated end of playback (media session keeps sending silence after). Only
+  # flips to idle if we are still in this turn's speaking state.
+  def handle_info({:playback_done, seq}, state) do
+    if seq == state.speak_seq and state.mode == :speaking do
+      {:noreply, %{state | mode: :idle, playback_timer: nil}}
+    else
+      {:noreply, %{state | playback_timer: nil}}
+    end
+  end
 
   # STT+brain exceeded their budget — never leave the call stuck.
   def handle_info(:processing_timeout, state) do
@@ -176,7 +181,7 @@ defmodule VoiceCore.VoiceAgent do
   @impl true
   def terminate(_reason, state) do
     cancel_timer(state.processing_timer)
-    cancel_timer(state.tts_timer)
+    cancel_timer(state.playback_timer)
     Logger.info("VoiceAgent #{state.call_id}: terminating")
     :ok
   end
@@ -188,9 +193,9 @@ defmodule VoiceCore.VoiceAgent do
   defp handle_turn_event(:speech_start, _pcm, state) do
     case state.mode do
       :speaking ->
-        # Barge-in: cut TTS now; the interruption is already captured in the
-        # turn buffer (the Turn core moved to :listening).
-        cancel_tts(state)
+        # Barge-in: flush queued audio now; the interruption is already captured
+        # in the turn buffer (the Turn core moved to :listening).
+        state = cancel_speech(state)
         :telemetry.execute([:voice_core, :voice_agent, :barge_in], %{}, %{call_id: state.call_id})
         Logger.info("VoiceAgent #{state.call_id}: barge-in detected", call_id: state.call_id)
         {:noreply, %{state | mode: :listening}}
@@ -264,39 +269,44 @@ defmodule VoiceCore.VoiceAgent do
       VoiceCore.ControlApi.report(state.call_id, "utterance.agent", %{text: text})
     end
 
-    state = %{state | transcript: [entry | state.transcript], mode: :speaking}
+    # A new utterance supersedes any audio still draining (e.g. an injected
+    # `speak` over a reply). Bump the sequence so a late TTS result is dropped.
+    VoiceCore.MediaSession.flush(state.media_session)
+    seq = state.speak_seq + 1
+
+    state = %{
+      state
+      | transcript: [entry | state.transcript],
+        mode: :speaking,
+        speak_seq: seq,
+        playback_timer: cancel_timer(state.playback_timer)
+    }
+
     agent = self()
 
     spawn(fn ->
       case state.ai.synthesize(text, state.tts_timeout_ms) do
-        {:ok, pcm} -> send(agent, {:tts_ready, pcm})
-        {:error, reason} -> send(agent, {:tts_failed, reason})
+        {:ok, pcm} -> send(agent, {:tts_ready, seq, pcm})
+        {:error, reason} -> send(agent, {:tts_failed, seq, reason})
       end
     end)
 
     state
   end
 
-  defp cancel_tts(state) do
-    cancel_timer(state.tts_timer)
-    %{state | tts_queue: [], tts_timer: nil}
+  # Stops playback now and invalidates any in-flight synthesis for this reply.
+  defp cancel_speech(state) do
+    cancel_timer(state.playback_timer)
+    VoiceCore.MediaSession.flush(state.media_session)
+    %{state | speak_seq: state.speak_seq + 1, playback_timer: nil}
   end
 
   defp cancel_timer(nil), do: :ok
   defp cancel_timer(ref), do: Process.cancel_timer(ref)
 
-  defp chunk_pcm(pcm, size) do
-    do_chunk(pcm, size, [])
+  defp pcm_duration_ms(pcm, sample_rate) when sample_rate > 0 do
+    round(div(byte_size(pcm), 2) * 1000 / sample_rate)
   end
 
-  defp do_chunk(<<>>, _size, acc), do: Enum.reverse(acc)
-
-  defp do_chunk(pcm, size, acc) when byte_size(pcm) <= size do
-    Enum.reverse([pcm | acc])
-  end
-
-  defp do_chunk(pcm, size, acc) do
-    <<chunk::binary-size(size), rest::binary>> = pcm
-    do_chunk(rest, size, [chunk | acc])
-  end
+  defp pcm_duration_ms(_pcm, _sample_rate), do: 0
 end

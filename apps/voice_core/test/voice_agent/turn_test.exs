@@ -13,7 +13,12 @@ defmodule VoiceCore.VoiceAgent.TurnTest do
   end
 
   defp new_turn(opts \\ []) do
-    Turn.new(Keyword.merge([threshold: 300.0, silence_frames_to_endpoint: 3], opts))
+    Turn.new(
+      Keyword.merge(
+        [threshold: 300.0, silence_ms_to_endpoint: 300, min_speech_ms: 100],
+        opts
+      )
+    )
   end
 
   describe "rms/2" do
@@ -58,6 +63,40 @@ defmodule VoiceCore.VoiceAgent.TurnTest do
 
       assert {:speech_end, pcm} = event
       assert byte_size(pcm) > 0
+      assert turn.state == :idle
+      assert turn.buffer == <<>>
+    end
+
+    test "endpoint window is time-based, not frame-count-based" do
+      # 20 ms frames (what Asterisk AudioSocket actually delivers): ~120 ms of
+      # speech then 300 ms of silence must endpoint regardless of frame count.
+      {turn, :speech_start} = Turn.feed_frame(new_turn(), frame(1000, 160))
+
+      turn =
+        Enum.reduce(1..5, turn, fn _, t ->
+          {t, :none} = Turn.feed_frame(t, frame(1000, 160))
+          t
+        end)
+
+      turn =
+        Enum.reduce(1..14, turn, fn _, t ->
+          {t, :none} = Turn.feed_frame(t, frame(0, 160))
+          t
+        end)
+
+      {_turn, event} = Turn.feed_frame(turn, frame(0, 160))
+      assert {:speech_end, _pcm} = event
+    end
+
+    test "a click shorter than min_speech_ms is discarded as noise" do
+      # One 100 ms blip, then silence: below the 200 ms minimum, so no turn.
+      {turn, :speech_start} = Turn.feed_frame(new_turn(min_speech_ms: 200), frame(1000))
+
+      {turn, :none} = Turn.feed_frame(turn, frame(0))
+      {turn, :none} = Turn.feed_frame(turn, frame(0))
+      {turn, event} = Turn.feed_frame(turn, frame(0))
+
+      assert event == :none
       assert turn.state == :idle
       assert turn.buffer == <<>>
     end

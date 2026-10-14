@@ -57,6 +57,7 @@ const ariConfig = (baseUrl: string): AriConfig => ({
   app: "voice_core",
   timeoutMs: 2000,
   endpointTemplate: "PJSIP/{to}",
+  callerId: '"AI Assistant" <2000>',
 });
 
 const silentLog = { info: () => {}, warn: () => {}, error: () => {} };
@@ -133,6 +134,22 @@ test("AriBackend originate expands the endpoint template and records events", as
     await backend.speak(originated.id, "hello");
     await backend.hangup(originated.id);
     assert.equal(registry.get(originated.id)!.state, "ended");
+  } finally {
+    await stub.close();
+  }
+});
+
+test("AriBackend presents the configured caller ID when the request omits from", async () => {
+  const stub = await startStub();
+  try {
+    const registry = new CallRegistry(100);
+    const config = { ...ariConfig(stub.baseUrl), callerId: '"AI Assistant" <2000>' };
+    const backend = new AriBackend(config, { registry, log: silentLog });
+
+    await backend.originate({ to: "1000" });
+
+    const query = new URLSearchParams(stub.requests[0]!.url.split("?")[1] ?? "");
+    assert.equal(query.get("callerId"), '"AI Assistant" <2000>');
   } finally {
     await stub.close();
   }

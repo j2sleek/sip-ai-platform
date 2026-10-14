@@ -45,6 +45,22 @@ int_env = fn name, default ->
   end
 end
 
+float_env = fn name, default ->
+  case System.get_env(name) do
+    nil ->
+      default
+
+    "" ->
+      default
+
+    value ->
+      case Float.parse(value) do
+        {parsed, _rest} -> parsed
+        :error -> default
+      end
+  end
+end
+
 config :voice_core, :ai,
   stt_url: System.get_env("STT_URL", "http://127.0.0.1:5001"),
   llm_url: System.get_env("LLM_URL", "http://127.0.0.1:5002"),
@@ -56,12 +72,16 @@ config :voice_core, :ai,
   vad_timeout_ms: int_env.("VAD_TIMEOUT_MS", 5_000)
 
 # ─── Turn/endpoint heuristics for the in-core voice agent body ──────────────
+# All time-based so the endpoint window does not depend on the media backend's
+# frame size (Asterisk AudioSocket delivers ~20 ms frames).
 config :voice_core, :agent,
   sample_rate: 8000,
   # RMS above this → speech; below → silence (energy VAD on 16-bit PCM)
-  vad_threshold: 300.0,
-  # Consecutive silence frames (100ms each) before an utterance is endpointed
-  silence_frames_to_endpoint: 6,
+  vad_threshold: float_env.("VAD_THRESHOLD", 300.0),
+  # Trailing silence before an utterance is endpointed (tune for "eager" ↔ "patient")
+  silence_ms_to_endpoint: int_env.("VAD_SILENCE_MS", 700),
+  # Ignore blips shorter than this (clicks, keypad thumps, single coughs)
+  min_speech_ms: int_env.("VAD_MIN_SPEECH_MS", 200),
   # Spoken when a call attaches without a brain-supplied greeting (inbound calls).
   greeting:
     System.get_env("AGENT_GREETING", "Hello, this is the AI assistant. How can I help you?")
